@@ -8,6 +8,8 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -44,13 +46,14 @@ type Response struct {
 
 // CacheProg implements the GOCACHEPROG protocol.
 type CacheProg struct {
-	backend  CacheBackend
-	reader   *bufio.Reader
-	writer   *bufio.Writer
-	debug    bool
-	putCount int
-	getCount int
-	hitCount int
+	backend    CacheBackend
+	reader     *bufio.Reader
+	writer     *bufio.Writer
+	writerLock sync.Mutex
+	debug      bool
+	putCount   atomic.Int64
+	getCount   atomic.Int64
+	hitCount   atomic.Int64
 }
 
 // NewCacheProg creates a new cache program instance.
@@ -63,12 +66,15 @@ func NewCacheProg(backend CacheBackend, debug bool) *CacheProg {
 	}
 }
 
-// SendResponse sends a response to stdout.
+// SendResponse sends a response to stdout (thread-safe).
 func (cp *CacheProg) SendResponse(resp Response) error {
 	data, err := json.Marshal(resp)
 	if err != nil {
 		return fmt.Errorf("failed to marshal response: %w", err)
 	}
+
+	cp.writerLock.Lock()
+	defer cp.writerLock.Unlock()
 
 	if _, err := cp.writer.Write(data); err != nil {
 		return fmt.Errorf("failed to write response: %w", err)
@@ -159,7 +165,7 @@ func (cp *CacheProg) HandleRequest(req *Request) error {
 
 	switch req.Command {
 	case CmdPut:
-		cp.putCount++
+		cp.putCount.Add(1)
 		diskPath, err := cp.backend.Put(req.ActionID, req.OutputID, req.Body, req.BodySize)
 		if err != nil {
 			resp.Err = err.Error()
@@ -168,14 +174,14 @@ func (cp *CacheProg) HandleRequest(req *Request) error {
 		}
 
 	case CmdGet:
-		cp.getCount++
+		cp.getCount.Add(1)
 		outputID, diskPath, size, putTime, miss, err := cp.backend.Get(req.ActionID)
 		if err != nil {
 			resp.Err = err.Error()
 		} else {
 			resp.Miss = miss
 			if !miss {
-				cp.hitCount++
+				cp.hitCount.Add(1)
 				resp.OutputID = outputID
 				resp.DiskPath = diskPath
 				resp.Size = size
@@ -196,45 +202,88 @@ func (cp *CacheProg) HandleRequest(req *Request) error {
 	return cp.SendResponse(resp)
 }
 
-// Run starts the cache program and processes requests.
+// Run starts the cache program and processes requests concurrently.
 func (cp *CacheProg) Run() error {
 	// Send initial response with capabilities
 	if err := cp.SendInitialResponse(); err != nil {
 		return fmt.Errorf("failed to send initial response: %w", err)
 	}
 
-	// Process requests
+	var wg sync.WaitGroup
+	errChan := make(chan error, 1)
+	done := make(chan struct{})
+
+	// Process requests concurrently
 	for {
 		req, err := cp.ReadRequest()
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
+			// Wait for any in-flight requests to complete
+			wg.Wait()
 			return fmt.Errorf("failed to read request: %w", err)
 		}
 
-		if err := cp.HandleRequest(req); err != nil {
-			return fmt.Errorf("failed to handle request: %w", err)
-		}
-
-		// Exit after close command
+		// Check if this is a close command
 		if req.Command == CmdClose {
+			// Wait for all pending requests to complete before handling close
+			wg.Wait()
+			if err := cp.HandleRequest(req); err != nil {
+				return fmt.Errorf("failed to handle close request: %w", err)
+			}
 			break
 		}
+
+		// Process request concurrently
+		wg.Add(1)
+		go func(r *Request) {
+			defer wg.Done()
+			if err := cp.HandleRequest(r); err != nil {
+				select {
+				case errChan <- err:
+				default:
+				}
+			}
+		}(req)
+
+		// Check for errors from goroutines
+		select {
+		case err := <-errChan:
+			wg.Wait()
+			return fmt.Errorf("failed to handle request: %w", err)
+		default:
+		}
+	}
+
+	// Wait for all goroutines to complete
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case err := <-errChan:
+		wg.Wait()
+		return fmt.Errorf("failed to handle request: %w", err)
 	}
 
 	// Print statistics in debug mode
 	if cp.debug {
-		missCount := cp.getCount - cp.hitCount
+		getCount := cp.getCount.Load()
+		hitCount := cp.hitCount.Load()
+		putCount := cp.putCount.Load()
+		missCount := getCount - hitCount
 		hitRate := 0.0
-		if cp.getCount > 0 {
-			hitRate = float64(cp.hitCount) / float64(cp.getCount) * 100
+		if getCount > 0 {
+			hitRate = float64(hitCount) / float64(getCount) * 100
 		}
 		fmt.Fprintf(os.Stderr, "[DEBUG] Cache statistics:\n")
 		fmt.Fprintf(os.Stderr, "[DEBUG]   GET operations: %d (hits: %d, misses: %d, hit rate: %.1f%%)\n",
-			cp.getCount, cp.hitCount, missCount, hitRate)
-		fmt.Fprintf(os.Stderr, "[DEBUG]   PUT operations: %d\n", cp.putCount)
-		fmt.Fprintf(os.Stderr, "[DEBUG]   Total operations: %d\n", cp.getCount+cp.putCount)
+			getCount, hitCount, missCount, hitRate)
+		fmt.Fprintf(os.Stderr, "[DEBUG]   PUT operations: %d\n", putCount)
+		fmt.Fprintf(os.Stderr, "[DEBUG]   Total operations: %d\n", getCount+putCount)
 	}
 
 	return nil
