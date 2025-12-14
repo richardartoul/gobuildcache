@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -15,7 +14,7 @@ import (
 type DiskBackend struct {
 	baseDir string
 	debug   bool
-	mu      sync.RWMutex
+	// mu      sync.RWMutex
 }
 
 // NewDiskBackend creates a new disk-based cache backend.
@@ -32,12 +31,10 @@ func NewDiskBackend(baseDir string, debug bool) (*DiskBackend, error) {
 	}, nil
 }
 
-
-
 // Put stores an object in the cache.
 func (d *DiskBackend) Put(actionID, outputID []byte, body io.Reader, bodySize int64) (string, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	// d.mu.Lock()
+	// defer d.mu.Unlock()
 
 	if d.debug {
 		fmt.Fprintf(os.Stderr, "[DEBUG] Put: actionID=%s, outputID=%s, size=%d\n",
@@ -92,8 +89,8 @@ func (d *DiskBackend) Put(actionID, outputID []byte, body io.Reader, bodySize in
 
 // Get retrieves an object from the cache.
 func (d *DiskBackend) Get(actionID []byte) ([]byte, string, int64, *time.Time, bool, error) {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
+	// d.mu.RLock()
+	// defer d.mu.RUnlock()
 
 	if d.debug {
 		fmt.Fprintf(os.Stderr, "[DEBUG] Get: actionID=%s\n", hex.EncodeToString(actionID))
@@ -171,8 +168,8 @@ func (d *DiskBackend) Close() error {
 
 // Clear removes all entries from the cache.
 func (d *DiskBackend) Clear() error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	// d.mu.Lock()
+	// defer d.mu.Unlock()
 
 	if d.debug {
 		fmt.Fprintf(os.Stderr, "[DEBUG] Clear: clearing cache directory %s\n", d.baseDir)
@@ -205,7 +202,6 @@ func (d *DiskBackend) Clear() error {
 
 	return nil
 }
-
 
 // actionIDToPath converts an actionID to a file path.
 func (d *DiskBackend) actionIDToPath(actionID []byte) string {
