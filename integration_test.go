@@ -19,7 +19,12 @@ func TestCacheIntegration(t *testing.T) {
 		buildDir   = filepath.Join(workspaceDir, "builds")
 		binaryPath = filepath.Join(buildDir, "gobuildcache")
 		testsDir   = filepath.Join(workspaceDir, "tests")
+		cacheDir   = filepath.Join(workspaceDir, "test-cache")
 	)
+
+	// Clean up test cache directory at the end
+	defer os.RemoveAll(cacheDir)
+
 	t.Log("Step 1: Compiling the binary...")
 	if err := os.MkdirAll(buildDir, 0755); err != nil {
 		t.Fatalf("Failed to create build directory: %v", err)
@@ -34,13 +39,21 @@ func TestCacheIntegration(t *testing.T) {
 	t.Log("✓ Binary compiled successfully")
 
 	t.Log("Step 2: Clearing the cache...")
-	clearCmd := exec.Command(binaryPath, "clear")
+	clearCmd := exec.Command(binaryPath, "clear", "-backend=disk", "-cache-dir="+cacheDir)
 	clearCmd.Dir = workspaceDir
 	clearOutput, err := clearCmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("Failed to clear cache: %v\nOutput: %s", err, clearOutput)
 	}
 	t.Logf("✓ Cache cleared successfully: %s", strings.TrimSpace(string(clearOutput)))
+
+	// Clear Go's local cache to ensure first run is not cached
+	t.Log("Step 2.5: Clearing Go's local cache...")
+	cleanCmd := exec.Command("go", "clean", "-cache")
+	cleanCmd.Dir = workspaceDir
+	if err := cleanCmd.Run(); err != nil {
+		t.Logf("Warning: Failed to clean Go cache: %v", err)
+	}
 
 	t.Log("Step 3: Running tests with cache program (first run)...")
 	firstRunCmd := exec.Command("go", "test", "-v", testsDir)

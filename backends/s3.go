@@ -185,8 +185,6 @@ func (s *S3) Get(actionID []byte) ([]byte, string, int64, *time.Time, bool, erro
 
 // Close performs cleanup operations.
 func (s *S3) Close() error {
-	// Optionally clean up temp files
-	// We'll leave them for now as they might be useful
 	return nil
 }
 

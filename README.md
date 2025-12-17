@@ -161,6 +161,44 @@ Or manually:
 go build -o builds/gobuildcache
 ```
 
+## Testing
+
+Run all tests:
+```bash
+go test ./...
+```
+
+Run with race detector:
+```bash
+go test -race ./...
+```
+
+### S3 Integration Tests
+
+To run S3 integration tests, set AWS credentials and bucket name as environment variables:
+
+```bash
+# Set credentials
+export AWS_ACCESS_KEY_ID=your_access_key
+export AWS_SECRET_ACCESS_KEY=your_secret_key
+export AWS_REGION=us-east-1
+export TEST_S3_BUCKET=your-bucket-name
+
+# Run S3 integration tests
+go test -v -run TestCacheIntegrationS3 -timeout 5m
+
+# Or in one line
+AWS_ACCESS_KEY_ID=xxx AWS_SECRET_ACCESS_KEY=yyy AWS_REGION=us-east-1 TEST_S3_BUCKET=my-bucket go test -v -run TestCacheIntegrationS3 -timeout 5m
+```
+
+**Note:** S3 tests will fail if credentials or bucket name are not set. To skip S3 tests, use the `-short` flag:
+
+```bash
+go test -short ./...  # Skips S3 tests
+```
+
+See [TESTING.md](TESTING.md) for detailed testing documentation.
+
 ## Architecture
 
 ### CacheBackend Interface

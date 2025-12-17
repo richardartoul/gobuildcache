@@ -34,6 +34,10 @@ clear: build
 	DEBUG=true $(BUILD_DIR)/$(BINARY_NAME) clear
 
 test:
-	@echo "Running tests..."
-	go test -count 1 -v -race .
+	@echo "Running short tests..."
+	go test -short -count 1 -v -race .
+
+test-long:
+	@echo "Running short and longer tests..."
+	TEST_S3_BUCKET=test-go-build-cache AWS_ENDPOINT_URL_S3=https://t3.storage.dev AWS_ACCESS_KEY_ID=tid_GHaEn_WOoPpmoblCBaWQCWolCHEaZnRWKYYiGdpgWuuvEpUgaI AWS_SECRET_ACCESS_KEY=tsec_iT8vZcCZwmc17pmdovhN4YBx5k5KXUbdVfqbbMuYky+SBpK8mRlANt_0dR2O87+9I0HSfv AWS_REGION=auto go test -count 1 -v -race .
 
