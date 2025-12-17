@@ -58,7 +58,11 @@ func TestCacheIntegration(t *testing.T) {
 	t.Log("Step 3: Running tests with cache program (first run)...")
 	firstRunCmd := exec.Command("go", "test", "-v", testsDir)
 	firstRunCmd.Dir = workspaceDir
-	firstRunCmd.Env = append(os.Environ(), "GOCACHEPROG="+binaryPath)
+	// Set environment to use disk backend when Go starts the cache program
+	firstRunCmd.Env = append(os.Environ(),
+		"GOCACHEPROG="+binaryPath,
+		"BACKEND_TYPE=disk",
+		"CACHE_DIR="+cacheDir)
 
 	var firstRunOutput bytes.Buffer
 	firstRunCmd.Stdout = &firstRunOutput
@@ -79,7 +83,11 @@ func TestCacheIntegration(t *testing.T) {
 	t.Log("Step 4: Running tests again to verify caching...")
 	secondRunCmd := exec.Command("go", "test", "-v", testsDir)
 	secondRunCmd.Dir = workspaceDir
-	secondRunCmd.Env = append(os.Environ(), "GOCACHEPROG="+binaryPath)
+	// Set environment to use disk backend when Go starts the cache program
+	secondRunCmd.Env = append(os.Environ(),
+		"GOCACHEPROG="+binaryPath,
+		"BACKEND_TYPE=disk",
+		"CACHE_DIR="+cacheDir)
 
 	var secondRunOutput bytes.Buffer
 	secondRunCmd.Stdout = &secondRunOutput
