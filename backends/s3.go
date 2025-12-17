@@ -310,4 +310,3 @@ func (s *S3) isNotFoundError(err error) bool {
 	return bytes.Contains([]byte(errMsg), []byte("NotFound")) ||
 		bytes.Contains([]byte(errMsg), []byte("NoSuchKey"))
 }
-
