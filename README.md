@@ -6,8 +6,23 @@ A remote caching server for Go builds that supports multiple storage backends.
 
 - **Multiple Storage Backends**: Choose between local disk storage or S3 cloud storage
 - **Go Build Cache Protocol**: Compatible with Go's remote cache protocol (`GOCACHEPROG`)
-- **Simple Configuration**: Command-line flags for easy configuration
+- **Flexible Configuration**: Use command-line flags or environment variables (or both!)
 - **Debug Mode**: Optional debug logging for troubleshooting
+
+## Configuration
+
+All configuration options can be set via **command-line flags** or **environment variables**. Command-line flags take precedence over environment variables.
+
+### Available Options
+
+| Flag | Environment Variable | Default | Description |
+|------|---------------------|---------|-------------|
+| `-backend` | `BACKEND_TYPE` | `disk` | Backend type: `disk` or `s3` |
+| `-cache-dir` | `CACHE_DIR` | `/tmp/gobuildcache` | Cache directory for disk backend |
+| `-s3-bucket` | `S3_BUCKET` | (none) | S3 bucket name (required for S3) |
+| `-s3-prefix` | `S3_PREFIX` | (empty) | S3 key prefix |
+| `-s3-tmp-dir` | `S3_TMP_DIR` | `/tmp/gobuildcache-s3` | Local temp directory for S3 |
+| `-debug` | `DEBUG` | `false` | Enable debug logging |
 
 ## Storage Backends
 
@@ -15,51 +30,55 @@ A remote caching server for Go builds that supports multiple storage backends.
 
 Stores cache files on the local filesystem.
 
-**Usage:**
+**Using Flags:**
 ```bash
 ./builds/gobuildcache -cache-dir=/path/to/cache
 ```
 
-**Flags:**
-- `-backend=disk` - Use disk backend (default)
-- `-cache-dir=PATH` - Cache directory (default: `/tmp/gobuildcache`)
-- `-debug` - Enable debug logging to stderr
-
-**Example:**
+**Using Environment Variables:**
 ```bash
-./builds/gobuildcache -cache-dir=/var/cache/gobuildcache -debug
+export CACHE_DIR=/path/to/cache
+./builds/gobuildcache
+```
+
+**Mixed (flags override env vars):**
+```bash
+export CACHE_DIR=/default/path
+./builds/gobuildcache -cache-dir=/override/path -debug
 ```
 
 ### S3 Backend
 
 Stores cache files in Amazon S3 (or S3-compatible storage).
 
-**Usage:**
+**Using Flags:**
 ```bash
 ./builds/gobuildcache -backend=s3 -s3-bucket=my-bucket
 ```
 
-**Flags:**
-- `-backend=s3` - Use S3 backend
-- `-s3-bucket=NAME` - S3 bucket name (required)
-- `-s3-prefix=PREFIX` - S3 key prefix (optional, default: "")
-- `-s3-tmp-dir=PATH` - Local temp directory for downloaded files (default: `/tmp/gobuildcache-s3`)
-- `-debug` - Enable debug logging to stderr
+**Using Environment Variables:**
+```bash
+export BACKEND_TYPE=s3
+export S3_BUCKET=my-bucket
+export S3_PREFIX=cache/
+./builds/gobuildcache
+```
+
+**Mixed (flags override env vars):**
+```bash
+export BACKEND_TYPE=s3
+export S3_BUCKET=default-bucket
+./builds/gobuildcache -s3-bucket=override-bucket -debug
+```
 
 **AWS Credentials:**
-Use standard AWS environment variables or `~/.aws/credentials`:
+AWS credentials are always configured via standard AWS environment variables or `~/.aws/credentials`:
 ```bash
 export AWS_REGION=us-east-1
 export AWS_ACCESS_KEY_ID=your_access_key
 export AWS_SECRET_ACCESS_KEY=your_secret_key
 # Or use AWS profiles:
 export AWS_PROFILE=your-profile
-```
-
-**Example:**
-```bash
-export AWS_REGION=us-east-1
-./builds/gobuildcache -backend=s3 -s3-bucket=my-team-build-cache -s3-prefix=go-builds/
 ```
 
 **How S3 Backend Works:**
@@ -206,27 +225,28 @@ The IAM user/role needs the following S3 permissions:
 ### Local Development with Disk Backend
 
 ```bash
-# Terminal 1: Start the server
+# Using flags
 ./builds/gobuildcache -debug -cache-dir=/tmp/my-go-cache
 
-# Terminal 2: Use the cache
-export GOCACHEPROG="$(pwd)/builds/gobuildcache"
-cd /path/to/your/go/project
-go build ./...
+# Or using environment variables
+export DEBUG=true
+export CACHE_DIR=/tmp/my-go-cache
+./builds/gobuildcache
 ```
 
 ### Team Build Cache with S3
 
 ```bash
-# All team members use the same configuration:
+# Option 1: Using environment variables (easier for team consistency)
+export BACKEND_TYPE=s3
+export S3_BUCKET=team-build-cache
+export S3_PREFIX=go/
 export AWS_REGION=us-east-1
 export GOCACHEPROG=/usr/local/bin/gobuildcache
-
-# Start the server (each team member runs this)
-gobuildcache -backend=s3 -s3-bucket=team-build-cache -s3-prefix=go/
-
-# Now all builds share the same cache
 go build ./...
+
+# Option 2: Using flags
+gobuildcache -backend=s3 -s3-bucket=team-build-cache -s3-prefix=go/
 ```
 
 ### CI/CD Pipeline with S3
@@ -234,6 +254,10 @@ go build ./...
 ```yaml
 # Example GitHub Actions workflow
 env:
+  # Use environment variables for cleaner configuration
+  BACKEND_TYPE: s3
+  S3_BUCKET: ci-build-cache
+  S3_PREFIX: ${{ github.repository }}/
   AWS_REGION: us-east-1
   GOCACHEPROG: ./gobuildcache
 
@@ -249,7 +273,16 @@ steps:
       role-to-assume: arn:aws:iam::123456789012:role/GithubActionsRole
       aws-region: us-east-1
   
-  - name: Start cache server in background
+  - name: Build with remote cache
+    run: go build ./...
+```
+
+**Alternative using flags:**
+```yaml
+steps:
+  # ... (download and AWS setup same as above)
+  
+  - name: Start cache server
     run: |
       ./gobuildcache -backend=s3 \
         -s3-bucket=ci-build-cache \
@@ -263,14 +296,30 @@ steps:
 
 ### Enable Debug Logging
 
+Using flags:
 ```bash
 ./builds/gobuildcache -debug
 ```
 
+Using environment variable:
+```bash
+export DEBUG=true
+./builds/gobuildcache
+```
+
 ### Check S3 Connectivity
 
+Using flags:
 ```bash
 ./builds/gobuildcache clear -backend=s3 -s3-bucket=your-bucket -debug
+```
+
+Using environment variables:
+```bash
+export BACKEND_TYPE=s3
+export S3_BUCKET=your-bucket
+export DEBUG=true
+./builds/gobuildcache clear
 ```
 
 ### Verify Cache is Being Used
