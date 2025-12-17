@@ -38,11 +38,10 @@ func main() {
 }
 
 func runServer() {
-	cacheDir := getCacheDir()
 	debug := getDebugMode()
 
-	// Create disk backend
-	backend, err := NewDiskBackend(cacheDir, debug)
+	// Create backend (disk or S3)
+	backend, err := createBackend(debug)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating cache backend: %v\n", err)
 		os.Exit(1)
@@ -58,11 +57,10 @@ func runServer() {
 }
 
 func runClear() {
-	cacheDir := getCacheDir()
 	debug := getDebugMode()
 
-	// Create disk backend
-	backend, err := NewDiskBackend(cacheDir, debug)
+	// Create backend (disk or S3)
+	backend, err := createBackend(debug)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating cache backend: %v\n", err)
 		os.Exit(1)
@@ -89,4 +87,49 @@ func getCacheDir() string {
 func getDebugMode() bool {
 	debugEnv := strings.ToLower(os.Getenv("DEBUG"))
 	return debugEnv == "true"
+}
+
+func createBackend(debug bool) (CacheBackend, error) {
+	backendType := strings.ToLower(os.Getenv("BACKEND_TYPE"))
+	
+	if backendType == "" {
+		backendType = "disk" // default to disk backend
+	}
+
+	var backend CacheBackend
+	var err error
+
+	switch backendType {
+	case "disk":
+		cacheDir := getCacheDir()
+		backend, err = NewDiskBackend(cacheDir)
+	
+	case "s3":
+		bucket := os.Getenv("S3_BUCKET")
+		if bucket == "" {
+			return nil, fmt.Errorf("S3_BUCKET environment variable is required for S3 backend")
+		}
+		
+		prefix := os.Getenv("S3_PREFIX")
+		tmpDir := os.Getenv("S3_TMP_DIR")
+		if tmpDir == "" {
+			tmpDir = filepath.Join(os.TempDir(), "gobuildcache-s3")
+		}
+		
+		backend, err = NewS3Backend(bucket, prefix, tmpDir)
+	
+	default:
+		return nil, fmt.Errorf("unknown backend type: %s (supported: disk, s3)", backendType)
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	// Wrap with debug backend if debug mode is enabled
+	if debug {
+		backend = NewDebugBackend(backend)
+	}
+
+	return backend, nil
 }

@@ -13,21 +13,18 @@ import (
 // DiskBackend implements CacheBackend using the local file system.
 type DiskBackend struct {
 	baseDir string
-	debug   bool
 	// mu      sync.RWMutex
 }
 
 // NewDiskBackend creates a new disk-based cache backend.
 // baseDir is the directory where cache files will be stored.
-// debug enables debug logging to stderr.
-func NewDiskBackend(baseDir string, debug bool) (*DiskBackend, error) {
+func NewDiskBackend(baseDir string) (*DiskBackend, error) {
 	if err := os.MkdirAll(baseDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create cache directory: %w", err)
 	}
 
 	return &DiskBackend{
 		baseDir: baseDir,
-		debug:   debug,
 	}, nil
 }
 
@@ -36,11 +33,6 @@ func (d *DiskBackend) Put(actionID, outputID []byte, body io.Reader, bodySize in
 	// d.mu.Lock()
 	// defer d.mu.Unlock()
 	time.Sleep(10 * time.Millisecond)
-
-	if d.debug {
-		fmt.Fprintf(os.Stderr, "[DEBUG] Put: actionID=%s, outputID=%s, size=%d\n",
-			hex.EncodeToString(actionID), hex.EncodeToString(outputID), bodySize)
-	}
 
 	diskPath := d.actionIDToPath(actionID)
 	metaPath := d.metadataPath(actionID)
@@ -81,10 +73,6 @@ func (d *DiskBackend) Put(actionID, outputID []byte, body io.Reader, bodySize in
 		return diskPath, nil // fallback to relative path
 	}
 
-	if d.debug {
-		fmt.Fprintf(os.Stderr, "[DEBUG] Put: stored at %s\n", absPath)
-	}
-
 	return absPath, nil
 }
 
@@ -94,27 +82,17 @@ func (d *DiskBackend) Get(actionID []byte) ([]byte, string, int64, *time.Time, b
 	// defer d.mu.RUnlock()
 
 	time.Sleep(10 * time.Millisecond)
-	if d.debug {
-		fmt.Fprintf(os.Stderr, "[DEBUG] Get: actionID=%s\n", hex.EncodeToString(actionID))
-	}
-
 	diskPath := d.actionIDToPath(actionID)
 	metaPath := d.metadataPath(actionID)
 
 	// Check if file exists
 	if _, err := os.Stat(diskPath); os.IsNotExist(err) {
-		if d.debug {
-			fmt.Fprintf(os.Stderr, "[DEBUG] Get: MISS\n")
-		}
 		return nil, "", 0, nil, true, nil
 	}
 
 	// Read metadata
 	metaData, err := os.ReadFile(metaPath)
 	if err != nil {
-		if d.debug {
-			fmt.Fprintf(os.Stderr, "[DEBUG] Get: failed to read metadata: %v\n", err)
-		}
 		return nil, "", 0, nil, true, nil
 	}
 
@@ -138,9 +116,6 @@ func (d *DiskBackend) Get(actionID []byte) ([]byte, string, int64, *time.Time, b
 
 	outputID, err := hex.DecodeString(outputIDHex)
 	if err != nil {
-		if d.debug {
-			fmt.Fprintf(os.Stderr, "[DEBUG] Get: failed to decode outputID: %v\n", err)
-		}
 		return nil, "", 0, nil, true, nil
 	}
 
@@ -151,19 +126,11 @@ func (d *DiskBackend) Get(actionID []byte) ([]byte, string, int64, *time.Time, b
 		absPath = diskPath
 	}
 
-	if d.debug {
-		fmt.Fprintf(os.Stderr, "[DEBUG] Get: HIT at %s, outputID=%s, size=%d\n",
-			absPath, hex.EncodeToString(outputID), size)
-	}
-
 	return outputID, absPath, size, &putTime, false, nil
 }
 
 // Close performs cleanup operations.
 func (d *DiskBackend) Close() error {
-	if d.debug {
-		fmt.Fprintf(os.Stderr, "[DEBUG] Close: closing disk backend\n")
-	}
 	// No cleanup needed for disk backend
 	return nil
 }
@@ -172,10 +139,6 @@ func (d *DiskBackend) Close() error {
 func (d *DiskBackend) Clear() error {
 	// d.mu.Lock()
 	// defer d.mu.Unlock()
-
-	if d.debug {
-		fmt.Fprintf(os.Stderr, "[DEBUG] Clear: clearing cache directory %s\n", d.baseDir)
-	}
 
 	// Read all files in the cache directory
 	entries, err := os.ReadDir(d.baseDir)
@@ -193,13 +156,6 @@ func (d *DiskBackend) Clear() error {
 		if err := os.Remove(path); err != nil {
 			return fmt.Errorf("failed to remove %s: %w", path, err)
 		}
-		if d.debug {
-			fmt.Fprintf(os.Stderr, "[DEBUG] Clear: removed %s\n", path)
-		}
-	}
-
-	if d.debug {
-		fmt.Fprintf(os.Stderr, "[DEBUG] Clear: cache cleared successfully\n")
 	}
 
 	return nil
