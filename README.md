@@ -2,6 +2,10 @@
 
 A remote caching server for Go builds that supports multiple storage backends.
 
+## TODOs
+
+1. Singleflight in server.go
+
 ## Features
 
 - **Multiple Storage Backends**: Choose between local disk storage or S3 cloud storage

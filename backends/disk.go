@@ -13,7 +13,6 @@ import (
 // Disk implements Backend using the local file system.
 type Disk struct {
 	baseDir string
-	// mu      sync.RWMutex
 }
 
 // NewDisk creates a new disk-based cache backend.
@@ -30,10 +29,6 @@ func NewDisk(baseDir string) (*Disk, error) {
 
 // Put stores an object in the cache.
 func (d *Disk) Put(actionID, outputID []byte, body io.Reader, bodySize int64) (string, error) {
-	// d.mu.Lock()
-	// defer d.mu.Unlock()
-	time.Sleep(10 * time.Millisecond)
-
 	diskPath := d.actionIDToPath(actionID)
 	metaPath := d.metadataPath(actionID)
 
@@ -78,10 +73,6 @@ func (d *Disk) Put(actionID, outputID []byte, body io.Reader, bodySize int64) (s
 
 // Get retrieves an object from the cache.
 func (d *Disk) Get(actionID []byte) ([]byte, string, int64, *time.Time, bool, error) {
-	// d.mu.RLock()
-	// defer d.mu.RUnlock()
-
-	time.Sleep(10 * time.Millisecond)
 	diskPath := d.actionIDToPath(actionID)
 	metaPath := d.metadataPath(actionID)
 
@@ -137,9 +128,6 @@ func (d *Disk) Close() error {
 
 // Clear removes all entries from the cache.
 func (d *Disk) Clear() error {
-	// d.mu.Lock()
-	// defer d.mu.Unlock()
-
 	// Read all files in the cache directory
 	entries, err := os.ReadDir(d.baseDir)
 	if err != nil {
@@ -172,4 +160,3 @@ func (d *Disk) metadataPath(actionID []byte) string {
 	hexID := hex.EncodeToString(actionID)
 	return filepath.Join(d.baseDir, hexID+".meta")
 }
-
