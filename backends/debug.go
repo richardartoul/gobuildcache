@@ -27,14 +27,16 @@ func (d *Debug) Put(actionID, outputID []byte, body io.Reader, bodySize int64) (
 	fmt.Fprintf(os.Stderr, "[DEBUG] Put: actionID=%s, outputID=%s, size=%d\n",
 		hex.EncodeToString(actionID), hex.EncodeToString(outputID), bodySize)
 
+	start := time.Now()
 	diskPath, err := d.backend.Put(actionID, outputID, body, bodySize)
+	duration := time.Since(start)
 
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "[DEBUG] Put: ERROR: %v\n", err)
+		fmt.Fprintf(os.Stderr, "[DEBUG] Put: ERROR: %v (duration: %v)\n", err, duration)
 		return diskPath, err
 	}
 
-	fmt.Fprintf(os.Stderr, "[DEBUG] Put: stored at %s\n", diskPath)
+	fmt.Fprintf(os.Stderr, "[DEBUG] Put: stored at %s (duration: %v)\n", diskPath, duration)
 	return diskPath, nil
 }
 
@@ -42,18 +44,20 @@ func (d *Debug) Put(actionID, outputID []byte, body io.Reader, bodySize int64) (
 func (d *Debug) Get(actionID []byte) ([]byte, string, int64, *time.Time, bool, error) {
 	fmt.Fprintf(os.Stderr, "[DEBUG] Get: actionID=%s\n", hex.EncodeToString(actionID))
 
+	start := time.Now()
 	outputID, diskPath, size, putTime, miss, err := d.backend.Get(actionID)
+	duration := time.Since(start)
 
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "[DEBUG] Get: ERROR: %v\n", err)
+		fmt.Fprintf(os.Stderr, "[DEBUG] Get: ERROR: %v (duration: %v)\n", err, duration)
 		return outputID, diskPath, size, putTime, miss, err
 	}
 
 	if miss {
-		fmt.Fprintf(os.Stderr, "[DEBUG] Get: MISS\n")
+		fmt.Fprintf(os.Stderr, "[DEBUG] Get: MISS (duration: %v)\n", duration)
 	} else {
-		fmt.Fprintf(os.Stderr, "[DEBUG] Get: HIT at %s, outputID=%s, size=%d\n",
-			diskPath, hex.EncodeToString(outputID), size)
+		fmt.Fprintf(os.Stderr, "[DEBUG] Get: HIT at %s, outputID=%s, size=%d (duration: %v)\n",
+			diskPath, hex.EncodeToString(outputID), size, duration)
 	}
 
 	return outputID, diskPath, size, putTime, miss, err
@@ -63,10 +67,14 @@ func (d *Debug) Get(actionID []byte) ([]byte, string, int64, *time.Time, bool, e
 func (d *Debug) Close() error {
 	fmt.Fprintf(os.Stderr, "[DEBUG] Close: closing backend\n")
 
+	start := time.Now()
 	err := d.backend.Close()
+	duration := time.Since(start)
 
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "[DEBUG] Close: ERROR: %v\n", err)
+		fmt.Fprintf(os.Stderr, "[DEBUG] Close: ERROR: %v (duration: %v)\n", err, duration)
+	} else {
+		fmt.Fprintf(os.Stderr, "[DEBUG] Close: completed (duration: %v)\n", duration)
 	}
 
 	return err
@@ -76,14 +84,16 @@ func (d *Debug) Close() error {
 func (d *Debug) Clear() error {
 	fmt.Fprintf(os.Stderr, "[DEBUG] Clear: clearing cache\n")
 
+	start := time.Now()
 	err := d.backend.Clear()
+	duration := time.Since(start)
 
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "[DEBUG] Clear: ERROR: %v\n", err)
+		fmt.Fprintf(os.Stderr, "[DEBUG] Clear: ERROR: %v (duration: %v)\n", err, duration)
 		return err
 	}
 
-	fmt.Fprintf(os.Stderr, "[DEBUG] Clear: cache cleared successfully\n")
+	fmt.Fprintf(os.Stderr, "[DEBUG] Clear: cache cleared successfully (duration: %v)\n", duration)
 	return nil
 }
 
