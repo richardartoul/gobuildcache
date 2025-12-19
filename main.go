@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"gobuildcache/backends"
+	"github.com/richardartoul/gobuildcache/backends"
 )
 
 // Global flags

@@ -15,8 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"gobuildcache/backends"
-
+	"github.com/richardartoul/gobuildcache/backends"
 	"golang.org/x/sync/singleflight"
 )
 

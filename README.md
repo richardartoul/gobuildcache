@@ -2,6 +2,22 @@
 
 A remote caching server for Go builds that supports multiple storage backends.
 
+## Installation
+
+Install using `go install`:
+
+```bash
+go install github.com/richardartoul/gobuildcache@latest
+```
+
+Or clone and build manually:
+
+```bash
+git clone https://github.com/richardartoul/gobuildcache.git
+cd gobuildcache
+go build
+```
+
 ## TODOs
 
 1. Actually use HandleRequestWithRetries instead of HandleRequest.
@@ -37,19 +53,19 @@ Stores cache files on the local filesystem.
 
 **Using Flags:**
 ```bash
-./builds/gobuildcache -cache-dir=/path/to/cache
+gobuildcache -cache-dir=/path/to/cache
 ```
 
 **Using Environment Variables:**
 ```bash
 export CACHE_DIR=/path/to/cache
-./builds/gobuildcache
+gobuildcache
 ```
 
 **Mixed (flags override env vars):**
 ```bash
 export CACHE_DIR=/default/path
-./builds/gobuildcache -cache-dir=/override/path -debug
+gobuildcache -cache-dir=/override/path -debug
 ```
 
 ### S3 Backend
@@ -58,7 +74,7 @@ Stores cache files in Amazon S3 (or S3-compatible storage).
 
 **Using Flags:**
 ```bash
-./builds/gobuildcache -backend=s3 -s3-bucket=my-bucket
+gobuildcache -backend=s3 -s3-bucket=my-bucket
 ```
 
 **Using Environment Variables:**
@@ -66,14 +82,14 @@ Stores cache files in Amazon S3 (or S3-compatible storage).
 export BACKEND_TYPE=s3
 export S3_BUCKET=my-bucket
 export S3_PREFIX=cache/
-./builds/gobuildcache
+gobuildcache
 ```
 
 **Mixed (flags override env vars):**
 ```bash
 export BACKEND_TYPE=s3
 export S3_BUCKET=default-bucket
-./builds/gobuildcache -s3-bucket=override-bucket -debug
+gobuildcache -s3-bucket=override-bucket -debug
 ```
 
 **AWS Credentials:**
@@ -98,9 +114,9 @@ export AWS_PROFILE=your-profile
 
 View available commands and flags:
 ```bash
-./builds/gobuildcache help
-./builds/gobuildcache -h
-./builds/gobuildcache clear -h
+gobuildcache help
+gobuildcache -h
+gobuildcache clear -h
 ```
 
 ### Running the Server
@@ -108,16 +124,16 @@ View available commands and flags:
 Start the cache server:
 ```bash
 # With disk backend (default)
-./builds/gobuildcache
+gobuildcache
 
 # With custom cache directory
-./builds/gobuildcache -cache-dir=/var/cache/go
+gobuildcache -cache-dir=/var/cache/go
 
 # With S3 backend
-./builds/gobuildcache -backend=s3 -s3-bucket=my-cache-bucket
+gobuildcache -backend=s3 -s3-bucket=my-cache-bucket
 
 # With debug logging
-./builds/gobuildcache -debug
+gobuildcache -debug
 ```
 
 The server will:
@@ -139,13 +155,13 @@ go build ./...
 Clear all cache entries:
 ```bash
 # Clear disk cache
-./builds/gobuildcache clear -cache-dir=/var/cache/go
+gobuildcache clear -cache-dir=/var/cache/go
 
 # Clear S3 cache
-./builds/gobuildcache clear -backend=s3 -s3-bucket=my-cache-bucket
+gobuildcache clear -backend=s3 -s3-bucket=my-cache-bucket
 
 # Clear with debug logging
-./builds/gobuildcache clear -debug
+gobuildcache clear -debug
 ```
 
 The clear command uses the same backend flags as the server command.
@@ -269,12 +285,12 @@ The IAM user/role needs the following S3 permissions:
 
 ```bash
 # Using flags
-./builds/gobuildcache -debug -cache-dir=/tmp/my-go-cache
+gobuildcache -debug -cache-dir=/tmp/my-go-cache
 
 # Or using environment variables
 export DEBUG=true
 export CACHE_DIR=/tmp/my-go-cache
-./builds/gobuildcache
+gobuildcache
 ```
 
 ### Team Build Cache with S3
@@ -341,20 +357,20 @@ steps:
 
 Using flags:
 ```bash
-./builds/gobuildcache -debug
+gobuildcache -debug
 ```
 
 Using environment variable:
 ```bash
 export DEBUG=true
-./builds/gobuildcache
+gobuildcache
 ```
 
 ### Check S3 Connectivity
 
 Using flags:
 ```bash
-./builds/gobuildcache clear -backend=s3 -s3-bucket=your-bucket -debug
+gobuildcache clear -backend=s3 -s3-bucket=your-bucket -debug
 ```
 
 Using environment variables:
@@ -362,7 +378,7 @@ Using environment variables:
 export BACKEND_TYPE=s3
 export S3_BUCKET=your-bucket
 export DEBUG=true
-./builds/gobuildcache clear
+gobuildcache clear
 ```
 
 ### Verify Cache is Being Used
