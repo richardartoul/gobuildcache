@@ -6,7 +6,14 @@ import (
 )
 
 // Backend defines the interface for cache storage backends.
+//
 // Implementations can be swapped to use different storage mechanisms.
+//
+// Implementations must be thread-safe and support concurrent operations,
+// but the caller (server.go) guarantees that there will never be two
+// inflight operations of the same type for the same actionID (singleflight)
+// which makes implementing the backends simpler (no need to worry about
+// locking at the filesystem layer).
 type Backend interface {
 	// Put stores an object in the cache.
 	// actionID is the cache key, outputID is stored with the body,
@@ -25,4 +32,3 @@ type Backend interface {
 	// Clear removes all entries from the cache.
 	Clear() error
 }
-

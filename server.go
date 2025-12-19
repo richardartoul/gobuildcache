@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"gobuildcache/backends"
+
+	"golang.org/x/sync/singleflight"
 )
 
 // Cmd represents a cache command type.
@@ -58,16 +60,21 @@ type CacheProg struct {
 
 	debug bool
 
+	// Singleflight group to deduplicate concurrent requests
+	sfGroup singleflight.Group
+
 	// Stats.
 	seenActionIDs struct {
 		sync.Mutex
 		ids map[string]int // Maps action ID to request count
 	}
-	duplicateGets atomic.Int64
-	duplicatePuts atomic.Int64
-	putCount      atomic.Int64
-	getCount      atomic.Int64
-	hitCount      atomic.Int64
+	duplicateGets    atomic.Int64
+	duplicatePuts    atomic.Int64
+	putCount         atomic.Int64
+	getCount         atomic.Int64
+	hitCount         atomic.Int64
+	deduplicatedGets atomic.Int64
+	deduplicatedPuts atomic.Int64
 }
 
 // NewCacheProg creates a new cache program instance.
@@ -191,6 +198,20 @@ func (cp *CacheProg) trackActionID(actionID []byte) bool {
 	return count > 0 // It's a duplicate if we've seen it before
 }
 
+// getResult holds the result of a Get operation for singleflight
+type getResult struct {
+	outputID []byte
+	diskPath string
+	size     int64
+	putTime  *time.Time
+	miss     bool
+}
+
+// putResult holds the result of a Put operation for singleflight
+type putResult struct {
+	diskPath string
+}
+
 // HandleRequest processes a single request and sends a response.
 func (cp *CacheProg) HandleRequest(req *Request) error {
 	var resp Response
@@ -207,11 +228,24 @@ func (cp *CacheProg) HandleRequest(req *Request) error {
 			}
 		}
 
-		diskPath, err := cp.backend.Put(req.ActionID, req.OutputID, req.Body, req.BodySize)
+		key := "put:" + hex.EncodeToString(req.ActionID)
+		v, err, shared := cp.sfGroup.Do(key, func() (interface{}, error) {
+			diskPath, err := cp.backend.Put(req.ActionID, req.OutputID, req.Body, req.BodySize)
+			return &putResult{diskPath: diskPath}, err
+		})
+
+		if shared {
+			cp.deduplicatedPuts.Add(1)
+			if cp.debug {
+				fmt.Fprintf(os.Stderr, "[DEBUG] PUT deduplicated (shared result): %s\n", hex.EncodeToString(req.ActionID))
+			}
+		}
+
 		if err != nil {
 			resp.Err = err.Error()
 		} else {
-			resp.DiskPath = diskPath
+			result := v.(*putResult)
+			resp.DiskPath = result.diskPath
 		}
 
 	case CmdGet:
@@ -224,17 +258,38 @@ func (cp *CacheProg) HandleRequest(req *Request) error {
 			}
 		}
 
-		outputID, diskPath, size, putTime, miss, err := cp.backend.Get(req.ActionID)
+		// Use singleflight to deduplicate concurrent GETs for the same actionID
+		key := "get:" + hex.EncodeToString(req.ActionID)
+		v, err, shared := cp.sfGroup.Do(key, func() (interface{}, error) {
+			outputID, diskPath, size, putTime, miss, err := cp.backend.Get(req.ActionID)
+			return &getResult{
+				outputID: outputID,
+				diskPath: diskPath,
+				size:     size,
+				putTime:  putTime,
+				miss:     miss,
+			}, err
+		})
+
+		if shared {
+			cp.deduplicatedGets.Add(1)
+			if cp.debug {
+				fmt.Fprintf(os.Stderr, "[DEBUG] GET deduplicated (shared result): %s\n", hex.EncodeToString(req.ActionID))
+			}
+		}
+
 		if err != nil {
 			resp.Err = err.Error()
 		} else {
-			resp.Miss = miss
-			if !miss {
+			result := v.(*getResult)
+
+			resp.Miss = result.miss
+			if !result.miss {
 				cp.hitCount.Add(1)
-				resp.OutputID = outputID
-				resp.DiskPath = diskPath
-				resp.Size = size
-				resp.Time = putTime
+				resp.OutputID = result.outputID
+				resp.DiskPath = result.diskPath
+				resp.Size = result.size
+				resp.Time = result.putTime
 			}
 		}
 
@@ -325,6 +380,8 @@ func (cp *CacheProg) Run() error {
 		putCount := cp.putCount.Load()
 		duplicateGets := cp.duplicateGets.Load()
 		duplicatePuts := cp.duplicatePuts.Load()
+		deduplicatedGets := cp.deduplicatedGets.Load()
+		deduplicatedPuts := cp.deduplicatedPuts.Load()
 		missCount := getCount - hitCount
 		hitRate := 0.0
 		if getCount > 0 {
@@ -340,9 +397,13 @@ func (cp *CacheProg) Run() error {
 			getCount, hitCount, missCount, hitRate)
 		fmt.Fprintf(os.Stderr, "[DEBUG]     Duplicate GETs: %d (%.1f%% of GETs)\n",
 			duplicateGets, float64(duplicateGets)/float64(getCount)*100)
+		fmt.Fprintf(os.Stderr, "[DEBUG]     Deduplicated GETs (singleflight): %d (%.1f%% of GETs)\n",
+			deduplicatedGets, float64(deduplicatedGets)/float64(getCount)*100)
 		fmt.Fprintf(os.Stderr, "[DEBUG]   PUT operations: %d\n", putCount)
 		fmt.Fprintf(os.Stderr, "[DEBUG]     Duplicate PUTs: %d (%.1f%% of PUTs)\n",
 			duplicatePuts, float64(duplicatePuts)/float64(putCount)*100)
+		fmt.Fprintf(os.Stderr, "[DEBUG]     Deduplicated PUTs (singleflight): %d (%.1f%% of PUTs)\n",
+			deduplicatedPuts, float64(deduplicatedPuts)/float64(putCount)*100)
 		fmt.Fprintf(os.Stderr, "[DEBUG]   Total operations: %d\n", getCount+putCount)
 		fmt.Fprintf(os.Stderr, "[DEBUG]   Unique action IDs: %d\n", uniqueActionIDs)
 	}
