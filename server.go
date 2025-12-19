@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -9,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -51,10 +53,13 @@ type Response struct {
 }
 
 // CacheProg implements the GOCACHEPROG protocol.
+// It manages a local disk cache that Go build tools access directly,
+// and uses a backend for distributed/persistent storage.
 type CacheProg struct {
-	backend backends.Backend
-	reader  *bufio.Reader
-	writer  struct {
+	backend  backends.Backend
+	cacheDir string // Local cache directory where Go accesses files
+	reader   *bufio.Reader
+	writer   struct {
 		sync.Mutex
 		w *bufio.Writer
 	}
@@ -82,7 +87,13 @@ type CacheProg struct {
 }
 
 // NewCacheProg creates a new cache program instance.
-func NewCacheProg(backend backends.Backend, debug bool) *CacheProg {
+// cacheDir is the local directory where cached files are stored for Go build tools to access.
+func NewCacheProg(backend backends.Backend, cacheDir string, debug bool) (*CacheProg, error) {
+	// Ensure cache directory exists
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create cache directory: %w", err)
+	}
+
 	// Configure logger level based on debug flag
 	logLevel := slog.LevelInfo
 	if debug {
@@ -95,14 +106,15 @@ func NewCacheProg(backend backends.Backend, debug bool) *CacheProg {
 	}))
 
 	cp := &CacheProg{
-		backend: backend,
-		reader:  bufio.NewReader(os.Stdin),
-		debug:   debug,
-		logger:  logger,
+		backend:  backend,
+		cacheDir: cacheDir,
+		reader:   bufio.NewReader(os.Stdin),
+		debug:    debug,
+		logger:   logger,
 	}
 	cp.writer.w = bufio.NewWriter(os.Stdout)
 	cp.seenActionIDs.ids = make(map[string]int)
-	return cp
+	return cp, nil
 }
 
 // SendResponse sends a response to stdout (thread-safe).
@@ -214,6 +226,62 @@ func (cp *CacheProg) trackActionID(actionID []byte) bool {
 	return count > 0 // It's a duplicate if we've seen it before
 }
 
+// actionIDToLocalPath converts an actionID to a local cache file path.
+func (cp *CacheProg) actionIDToLocalPath(actionID []byte) string {
+	hexID := hex.EncodeToString(actionID)
+	return filepath.Join(cp.cacheDir, hexID)
+}
+
+// writeToLocalCache atomically writes data from a reader to the local cache.
+// Returns the absolute path to the cached file.
+func (cp *CacheProg) writeToLocalCache(actionID []byte, body io.Reader) (string, error) {
+	diskPath := cp.actionIDToLocalPath(actionID)
+
+	// Create a temporary file in the same directory for atomic write
+	tmpFile, err := os.CreateTemp(cp.cacheDir, ".tmp-*")
+	if err != nil {
+		return "", fmt.Errorf("failed to create temp file: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+	defer os.Remove(tmpPath) // Clean up if something goes wrong
+
+	// Copy data to temp file
+	_, err = io.Copy(tmpFile, body)
+	closeErr := tmpFile.Close()
+	if err != nil {
+		return "", fmt.Errorf("failed to write to temp file: %w", err)
+	}
+	if closeErr != nil {
+		return "", fmt.Errorf("failed to close temp file: %w", closeErr)
+	}
+
+	// Atomically rename temp file to final destination
+	if err := os.Rename(tmpPath, diskPath); err != nil {
+		return "", fmt.Errorf("failed to rename cache file: %w", err)
+	}
+
+	absPath, err := filepath.Abs(diskPath)
+	if err != nil {
+		return diskPath, nil // fallback to relative path
+	}
+
+	return absPath, nil
+}
+
+// checkLocalCache checks if a file exists in the local cache and returns its absolute path.
+// Returns empty string if not found.
+func (cp *CacheProg) checkLocalCache(actionID []byte) string {
+	diskPath := cp.actionIDToLocalPath(actionID)
+	if _, err := os.Stat(diskPath); err == nil {
+		absPath, err := filepath.Abs(diskPath)
+		if err != nil {
+			return diskPath
+		}
+		return absPath
+	}
+	return ""
+}
+
 // getResult holds the result of a Get operation for singleflight
 type getResult struct {
 	outputID []byte
@@ -246,8 +314,35 @@ func (cp *CacheProg) HandleRequest(req *Request) (Response, error) {
 
 		key := "put:" + hex.EncodeToString(req.ActionID)
 		v, err, shared := cp.sfGroup.Do(key, func() (interface{}, error) {
-			diskPath, err := cp.backend.Put(req.ActionID, req.OutputID, req.Body, req.BodySize)
-			return &putResult{diskPath: diskPath}, err
+			// Read body into memory (we need to write it to both local cache and backend)
+			var bodyData []byte
+			if req.BodySize > 0 && req.Body != nil {
+				bodyData = make([]byte, req.BodySize)
+				n, err := io.ReadFull(req.Body, bodyData)
+				if err != nil && err != io.EOF {
+					return nil, fmt.Errorf("failed to read body: %w", err)
+				}
+				if int64(n) != req.BodySize {
+					return nil, fmt.Errorf("size mismatch: expected %d, read %d", req.BodySize, n)
+				}
+			}
+
+			// Write to local cache
+			diskPath, err := cp.writeToLocalCache(req.ActionID, bytes.NewReader(bodyData))
+			if err != nil {
+				return nil, fmt.Errorf("failed to write to local cache: %w", err)
+			}
+
+			// Store in backend
+			err = cp.backend.Put(req.ActionID, req.OutputID, bytes.NewReader(bodyData), req.BodySize)
+			if err != nil {
+				// Local cache is still valid even if backend fails
+				cp.logger.Warn("backend PUT failed, but local cache succeeded",
+					"actionID", hex.EncodeToString(req.ActionID),
+					"error", err)
+			}
+
+			return &putResult{diskPath: diskPath}, nil
 		})
 
 		if shared {
@@ -259,7 +354,6 @@ func (cp *CacheProg) HandleRequest(req *Request) (Response, error) {
 
 		if err != nil {
 			resp.Err = err.Error()
-			resp.Miss = true
 			return resp, err
 		}
 
@@ -279,14 +373,49 @@ func (cp *CacheProg) HandleRequest(req *Request) (Response, error) {
 
 		key := "get:" + hex.EncodeToString(req.ActionID)
 		v, err, shared := cp.sfGroup.Do(key, func() (interface{}, error) {
-			outputID, diskPath, size, putTime, miss, err := cp.backend.Get(req.ActionID)
+			// Check local cache first
+			// if diskPath := cp.checkLocalCache(req.ActionID); diskPath != "" {
+			// 	// Local cache hit - we still need metadata from backend
+			// 	// For now, we'll just return the path
+			// 	// TODO: Consider storing metadata locally as well
+			// 	return &getResult{
+			// 		diskPath: diskPath,
+			// 		miss:     false,
+			// 	}, nil
+			// }
+
+			// Local cache miss - get from backend
+			outputID, body, size, putTime, miss, err := cp.backend.Get(req.ActionID)
+			if err != nil {
+				return nil, err
+			}
+
+			if miss {
+				// Backend miss
+				return &getResult{
+					miss: true,
+				}, nil
+			}
+
+			// Backend hit - write to local cache
+			defer body.Close()
+			diskPath, err := cp.writeToLocalCache(req.ActionID, body)
+			if err != nil {
+				cp.logger.Warn("failed to write to local cache after backend hit",
+					"actionID", hex.EncodeToString(req.ActionID),
+					"error", err)
+				// We got data from backend but couldn't cache it locally
+				// This is not fatal - we can still serve from backend
+				return nil, fmt.Errorf("failed to cache locally: %w", err)
+			}
+
 			return &getResult{
 				outputID: outputID,
 				diskPath: diskPath,
 				size:     size,
 				putTime:  putTime,
-				miss:     miss,
-			}, err
+				miss:     false,
+			}, nil
 		})
 
 		if shared {
@@ -424,12 +553,14 @@ func (cp *CacheProg) Run() error {
 			resp, err := cp.HandleRequest(req)
 			if err != nil {
 				requestLogger.Error("failed to handle close request in backend", "error", err)
+				// Complation / testing will fail if cleanup fails, but we've already done all the
+				// work and logged it, so just tell the compiler everything is fine so it can exit
+				// cleanly.
+				resp.Err = ""
 			} else {
 				requestLogger.Debug("close command handled in backend")
 			}
-			if err != nil {
-				resp.Err = err.Error()
-			}
+
 			if err := cp.SendResponse(resp); err != nil {
 				requestLogger.Error("failed to send close response, exiting...", "error", err)
 				return fmt.Errorf("failed to send close response: %w", err)

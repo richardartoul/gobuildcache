@@ -22,45 +22,45 @@ func NewDebug(backend Backend) *Debug {
 	}
 }
 
-// Put stores an object in the cache with debug logging.
-func (d *Debug) Put(actionID, outputID []byte, body io.Reader, bodySize int64) (string, error) {
+// Put stores an object in the backend storage with debug logging.
+func (d *Debug) Put(actionID, outputID []byte, body io.Reader, bodySize int64) error {
 	fmt.Fprintf(os.Stderr, "[DEBUG] Put: actionID=%s, outputID=%s, size=%d\n",
 		hex.EncodeToString(actionID), hex.EncodeToString(outputID), bodySize)
 
 	start := time.Now()
-	diskPath, err := d.backend.Put(actionID, outputID, body, bodySize)
+	err := d.backend.Put(actionID, outputID, body, bodySize)
 	duration := time.Since(start)
 
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[DEBUG] Put: ERROR: %v (duration: %v)\n", err, duration)
-		return diskPath, err
+		return err
 	}
 
-	fmt.Fprintf(os.Stderr, "[DEBUG] Put: stored at %s (duration: %v)\n", diskPath, duration)
-	return diskPath, nil
+	fmt.Fprintf(os.Stderr, "[DEBUG] Put: success (duration: %v)\n", duration)
+	return nil
 }
 
-// Get retrieves an object from the cache with debug logging.
-func (d *Debug) Get(actionID []byte) ([]byte, string, int64, *time.Time, bool, error) {
+// Get retrieves an object from the backend storage with debug logging.
+func (d *Debug) Get(actionID []byte) ([]byte, io.ReadCloser, int64, *time.Time, bool, error) {
 	fmt.Fprintf(os.Stderr, "[DEBUG] Get: actionID=%s\n", hex.EncodeToString(actionID))
 
 	start := time.Now()
-	outputID, diskPath, size, putTime, miss, err := d.backend.Get(actionID)
+	outputID, body, size, putTime, miss, err := d.backend.Get(actionID)
 	duration := time.Since(start)
 
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[DEBUG] Get: ERROR: %v (duration: %v)\n", err, duration)
-		return outputID, diskPath, size, putTime, miss, err
+		return outputID, body, size, putTime, miss, err
 	}
 
 	if miss {
 		fmt.Fprintf(os.Stderr, "[DEBUG] Get: MISS (duration: %v)\n", duration)
 	} else {
-		fmt.Fprintf(os.Stderr, "[DEBUG] Get: HIT at %s, outputID=%s, size=%d (duration: %v)\n",
-			diskPath, hex.EncodeToString(outputID), size, duration)
+		fmt.Fprintf(os.Stderr, "[DEBUG] Get: HIT, outputID=%s, size=%d (duration: %v)\n",
+			hex.EncodeToString(outputID), size, duration)
 	}
 
-	return outputID, diskPath, size, putTime, miss, err
+	return outputID, body, size, putTime, miss, err
 }
 
 // Close performs cleanup operations with debug logging.

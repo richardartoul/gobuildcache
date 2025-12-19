@@ -65,9 +65,9 @@ func (d *Disk) getLock(actionID []byte) *sync.Mutex {
 	return lock
 }
 
-// Put stores an object in the cache atomically.
+// Put stores an object in the backend storage atomically.
 // Uses write-to-temp-then-rename to ensure Get operations never see partial writes.
-func (d *Disk) Put(actionID, outputID []byte, body io.Reader, bodySize int64) (string, error) {
+func (d *Disk) Put(actionID, outputID []byte, body io.Reader, bodySize int64) error {
 	// Acquire per-key lock to prevent concurrent writes to the same actionID
 	lock := d.getLock(actionID)
 	lock.Lock()
@@ -79,7 +79,7 @@ func (d *Disk) Put(actionID, outputID []byte, body io.Reader, bodySize int64) (s
 	// Create temporary files for atomic write
 	tmpFile, err := d.createTempFile()
 	if err != nil {
-		return "", fmt.Errorf("failed to create temp file: %w", err)
+		return fmt.Errorf("failed to create temp file: %w", err)
 	}
 	tmpFilePath := tmpFile.Name()
 	defer os.Remove(tmpFilePath) // Clean up temp file if something goes wrong
@@ -93,18 +93,18 @@ func (d *Disk) Put(actionID, outputID []byte, body io.Reader, bodySize int64) (s
 		written, err = io.Copy(tmpFile, body)
 		if err != nil {
 			tmpFile.Close()
-			return "", fmt.Errorf("failed to write cache file: %w", err)
+			return fmt.Errorf("failed to write cache file: %w", err)
 		}
 
 		if written != bodySize {
 			tmpFile.Close()
-			return "", fmt.Errorf("size mismatch: expected %d, wrote %d", bodySize, written)
+			return fmt.Errorf("size mismatch: expected %d, wrote %d", bodySize, written)
 		}
 	}
 
 	// Close the temp file before renaming
 	if err := tmpFile.Close(); err != nil {
-		return "", fmt.Errorf("failed to close temp file: %w", err)
+		return fmt.Errorf("failed to close temp file: %w", err)
 	}
 
 	// Write metadata to temp file
@@ -112,32 +112,28 @@ func (d *Disk) Put(actionID, outputID []byte, body io.Reader, bodySize int64) (s
 	meta := fmt.Sprintf("outputID:%s\nsize:%d\ntime:%d\n",
 		hex.EncodeToString(outputID), bodySize, now.Unix())
 	if err := os.WriteFile(tmpMetaPath, []byte(meta), 0644); err != nil {
-		return "", fmt.Errorf("failed to write metadata: %w", err)
+		return fmt.Errorf("failed to write metadata: %w", err)
 	}
 
 	// Atomically rename temp files to final destination
 	// This ensures Get operations never see partial writes
 	if err := os.Rename(tmpMetaPath, metaPath); err != nil {
-		return "", fmt.Errorf("failed to rename metadata file: %w", err)
+		return fmt.Errorf("failed to rename metadata file: %w", err)
 	}
 
 	if err := os.Rename(tmpFilePath, diskPath); err != nil {
 		// Try to clean up the metadata file if data file rename fails
 		os.Remove(metaPath)
-		return "", fmt.Errorf("failed to rename cache file: %w", err)
+		return fmt.Errorf("failed to rename cache file: %w", err)
 	}
 
-	absPath, err := filepath.Abs(diskPath)
-	if err != nil {
-		return diskPath, nil // fallback to relative path
-	}
-
-	return absPath, nil
+	return nil
 }
 
-// Get retrieves an object from the cache.
+// Get retrieves an object from the backend storage.
+// Returns the object data as an io.ReadCloser that must be closed by the caller.
 // Uses per-key locking to ensure it never sees partial Put operations.
-func (d *Disk) Get(actionID []byte) ([]byte, string, int64, *time.Time, bool, error) {
+func (d *Disk) Get(actionID []byte) ([]byte, io.ReadCloser, int64, *time.Time, bool, error) {
 	// Acquire per-key lock to ensure we don't read during a write
 	lock := d.getLock(actionID)
 	lock.Lock()
@@ -148,7 +144,7 @@ func (d *Disk) Get(actionID []byte) ([]byte, string, int64, *time.Time, bool, er
 
 	// Check if file exists
 	if _, err := os.Stat(diskPath); os.IsNotExist(err) {
-		return nil, "", 0, nil, true, nil
+		return nil, nil, 0, nil, true, nil
 	}
 
 	// Read metadata
@@ -156,7 +152,7 @@ func (d *Disk) Get(actionID []byte) ([]byte, string, int64, *time.Time, bool, er
 	if err != nil {
 		// If metadata is missing but data file exists, treat as miss
 		// This can happen if a Put operation was interrupted
-		return nil, "", 0, nil, true, nil
+		return nil, nil, 0, nil, true, nil
 	}
 
 	// Parse metadata (simple format: outputID:hex\nsize:num\ntime:unix\n)
@@ -180,17 +176,21 @@ func (d *Disk) Get(actionID []byte) ([]byte, string, int64, *time.Time, bool, er
 	outputID, err := hex.DecodeString(outputIDHex)
 	if err != nil {
 		// Corrupted metadata, treat as miss
-		return nil, "", 0, nil, true, nil
+		return nil, nil, 0, nil, true, nil
 	}
 
 	putTime := time.Unix(putTimeUnix, 0)
 
-	absPath, err := filepath.Abs(diskPath)
+	// Open the file for reading
+	// Note: We can safely unlock after opening because the file is immutable
+	// (atomic write-to-temp-then-rename ensures files are never modified after creation)
+	file, err := os.Open(diskPath)
 	if err != nil {
-		absPath = diskPath
+		// File might have been deleted between stat and open
+		return nil, nil, 0, nil, true, nil
 	}
 
-	return outputID, absPath, size, &putTime, false, nil
+	return outputID, file, size, &putTime, false, nil
 }
 
 // Close performs cleanup operations.

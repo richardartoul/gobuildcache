@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -39,8 +40,8 @@ func TestCacheIntegrationErrorBackend(t *testing.T) {
 	t.Log("✓ Binary compiled successfully")
 
 	// Test with 50% error rate - some operations should fail, but not all
-	errorRate := "0.5"
-	t.Logf("Step 2: Running tests with %s%% error rate...", errorRate)
+	errorRate := 0.5
+	t.Logf("Step 2: Running tests with %.2f%% error rate...", errorRate*100)
 
 	// Clear Go's local cache to ensure clean state
 	cleanCmd := exec.Command("go", "clean", "-cache")
@@ -56,7 +57,7 @@ func TestCacheIntegrationErrorBackend(t *testing.T) {
 		"GOCACHEPROG="+binaryPath,
 		"BACKEND_TYPE=disk",
 		"CACHE_DIR="+cacheDir,
-		"ERROR_RATE="+errorRate,
+		"ERROR_RATE="+fmt.Sprintf("%f", errorRate),
 		"DEBUG=false")
 
 	var testOutput bytes.Buffer
@@ -66,7 +67,7 @@ func TestCacheIntegrationErrorBackend(t *testing.T) {
 	// Note: Tests may fail due to cache errors, which is expected
 	err = testCmd.Run()
 	if err != nil {
-		t.Fatalf("Tests failed with %s%% error rate: %v\nOutput:\n%s", errorRate, err, testOutput.String())
+		t.Fatalf("Tests failed with %.2f%% error rate: %v\nOutput:\n%s", errorRate*100, err, testOutput.String())
 	}
 	output := testOutput.String()
 	t.Logf("Test output:\n%s", output)

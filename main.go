@@ -159,7 +159,11 @@ func runServer() {
 	defer backend.Close()
 
 	// Create and run cache program
-	prog := NewCacheProg(backend, debug)
+	prog, err := NewCacheProg(backend, cacheDir, debug)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating cache program: %v\n", err)
+		os.Exit(1)
+	}
 	if err := prog.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error running cache program: %v\n", err)
 		os.Exit(1)
@@ -199,7 +203,7 @@ func createBackend() (backends.Backend, error) {
 			return nil, fmt.Errorf("S3 bucket is required for S3 backend (set via -s3-bucket flag or S3_BUCKET env var)")
 		}
 
-		backend, err = backends.NewS3(s3Bucket, s3Prefix, s3TmpDir)
+		backend, err = backends.NewS3(s3Bucket, s3Prefix)
 
 	default:
 		return nil, fmt.Errorf("unknown backend type: %s (supported: disk, s3)", backendType)
@@ -212,9 +216,7 @@ func createBackend() (backends.Backend, error) {
 	// Wrap with error backend if error rate is configured
 	if errorRate > 0 {
 		backend = backends.NewError(backend, errorRate)
-		if debug {
-			fmt.Fprintf(os.Stderr, "[INFO] Error injection enabled with rate: %.2f%%\n", errorRate*100)
-		}
+		fmt.Fprintf(os.Stderr, "[INFO] Error injection enabled with rate: %.2f%%\n", errorRate*100)
 	}
 
 	// Wrap with debug backend if debug mode is enabled
