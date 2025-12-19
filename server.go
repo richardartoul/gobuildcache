@@ -77,6 +77,8 @@ type CacheProg struct {
 	hitCount         atomic.Int64
 	deduplicatedGets atomic.Int64
 	deduplicatedPuts atomic.Int64
+	retriedRequests  atomic.Int64
+	totalRetries     atomic.Int64
 }
 
 // NewCacheProg creates a new cache program instance.
@@ -257,6 +259,7 @@ func (cp *CacheProg) HandleRequest(req *Request) (Response, error) {
 
 		if err != nil {
 			resp.Err = err.Error()
+			resp.Miss = true
 			return resp, err
 		}
 
@@ -295,6 +298,7 @@ func (cp *CacheProg) HandleRequest(req *Request) (Response, error) {
 
 		if err != nil {
 			resp.Err = err.Error()
+			resp.Miss = true
 			return resp, err
 		}
 
@@ -320,6 +324,70 @@ func (cp *CacheProg) HandleRequest(req *Request) (Response, error) {
 		resp.Err = fmt.Sprintf("unknown command: %s", req.Command)
 		return resp, fmt.Errorf("unknown command: %s", req.Command)
 	}
+}
+
+// HandleRequestWithRetries wraps HandleRequest with retry logic.
+// It will retry failed requests up to maxRetries times with exponential backoff.
+// maxRetries of 0 means no retries (same as calling HandleRequest directly).
+// Returns the final response and error after all retries are exhausted.
+func (cp *CacheProg) HandleRequestWithRetries(req *Request, maxRetries int) (Response, error) {
+
+	var (
+		resp    Response
+		err     error
+		attempt int
+		// Calculate base delay for exponential backoff (starting at 10ms)
+		baseDelay = 10 * time.Millisecond
+	)
+	for attempt = 0; attempt <= maxRetries; attempt++ {
+		// Call the actual handler
+		resp, err = cp.HandleRequest(req)
+
+		// If successful or if it's a Close command, return immediately
+		if err == nil || req.Command == CmdClose {
+			if attempt > 0 {
+				cp.logger.Debug("request succeeded after retries",
+					"command", req.Command,
+					"actionID", hex.EncodeToString(req.ActionID),
+					"attempt", attempt+1)
+			}
+			return resp, err
+		}
+
+		// If we've exhausted retries, return the error
+		if attempt >= maxRetries {
+			if maxRetries > 0 {
+				cp.logger.Warn("request failed after all retries",
+					"command", req.Command,
+					"actionID", hex.EncodeToString(req.ActionID),
+					"attempts", attempt+1,
+					"error", err)
+			}
+			return resp, err
+		}
+
+		// Track retry statistics
+		if attempt == 0 {
+			cp.retriedRequests.Add(1)
+		}
+		cp.totalRetries.Add(1)
+
+		// Calculate exponential backoff delay: baseDelay * 2^attempt
+		delay := baseDelay * time.Duration(1<<uint(attempt))
+
+		cp.logger.Debug("retrying request after error",
+			"command", req.Command,
+			"actionID", hex.EncodeToString(req.ActionID),
+			"attempt", attempt+1,
+			"maxRetries", maxRetries,
+			"delay", delay,
+			"error", err)
+
+		// Wait before retrying
+		time.Sleep(delay)
+	}
+
+	return resp, err
 }
 
 // Run starts the cache program and processes requests concurrently.
@@ -377,6 +445,7 @@ func (cp *CacheProg) Run() error {
 			resp, err := cp.HandleRequest(r)
 			if err != nil {
 				requestLogger.Error("failed to handle request in backend", "command", req.Command, "error", err)
+				resp.Err = err.Error()
 			} else {
 				requestLogger.Debug("command handled in backend")
 			}
@@ -419,6 +488,8 @@ func (cp *CacheProg) Run() error {
 		duplicatePuts := cp.duplicatePuts.Load()
 		deduplicatedGets := cp.deduplicatedGets.Load()
 		deduplicatedPuts := cp.deduplicatedPuts.Load()
+		retriedRequests := cp.retriedRequests.Load()
+		totalRetries := cp.totalRetries.Load()
 		missCount := getCount - hitCount
 		hitRate := 0.0
 		if getCount > 0 {
@@ -428,6 +499,8 @@ func (cp *CacheProg) Run() error {
 		cp.seenActionIDs.Lock()
 		uniqueActionIDs := len(cp.seenActionIDs.ids)
 		cp.seenActionIDs.Unlock()
+
+		totalOps := getCount + putCount
 
 		fmt.Fprintf(os.Stderr, "[DEBUG] Cache statistics:\n")
 		fmt.Fprintf(os.Stderr, "[DEBUG]   GET operations: %d (hits: %d, misses: %d, hit rate: %.1f%%)\n",
@@ -441,8 +514,15 @@ func (cp *CacheProg) Run() error {
 			duplicatePuts, float64(duplicatePuts)/float64(putCount)*100)
 		fmt.Fprintf(os.Stderr, "[DEBUG]     Deduplicated PUTs (singleflight): %d (%.1f%% of PUTs)\n",
 			deduplicatedPuts, float64(deduplicatedPuts)/float64(putCount)*100)
-		fmt.Fprintf(os.Stderr, "[DEBUG]   Total operations: %d\n", getCount+putCount)
+		fmt.Fprintf(os.Stderr, "[DEBUG]   Total operations: %d\n", totalOps)
 		fmt.Fprintf(os.Stderr, "[DEBUG]   Unique action IDs: %d\n", uniqueActionIDs)
+		if retriedRequests > 0 {
+			avgRetries := float64(totalRetries) / float64(retriedRequests)
+			fmt.Fprintf(os.Stderr, "[DEBUG]   Retried requests: %d (%.1f%% of operations)\n",
+				retriedRequests, float64(retriedRequests)/float64(totalOps)*100)
+			fmt.Fprintf(os.Stderr, "[DEBUG]   Total retries: %d (avg %.1f retries per failed request)\n",
+				totalRetries, avgRetries)
+		}
 	}
 
 	return nil
