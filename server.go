@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/richardartoul/gobuildcache/backends"
-	"golang.org/x/sync/singleflight"
+	"github.com/richardartoul/gobuildcache/dedupe"
 )
 
 // Cmd represents a cache command type.
@@ -66,8 +66,8 @@ type CacheProg struct {
 	printStats bool
 	logger     *slog.Logger
 
-	// Singleflight group to deduplicate concurrent requests
-	sfGroup singleflight.Group
+	// dedupe.Group to deduplicate concurrent requests
+	sfGroup dedupe.Group
 
 	// Stats.
 	seenActionIDs struct {
@@ -112,6 +112,7 @@ func NewCacheProg(backend backends.Backend, cacheDir string, debug bool, printSt
 		debug:      debug,
 		printStats: printStats,
 		logger:     logger,
+		sfGroup:    dedupe.NewSingleflightGroup(),
 	}
 	cp.writer.w = bufio.NewWriter(os.Stdout)
 	cp.seenActionIDs.ids = make(map[string]int)
