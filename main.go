@@ -55,9 +55,9 @@ func runServerCommand() {
 	debugDefault := getEnvBool("DEBUG", false)
 	printStatsDefault := getEnvBool("PRINT_STATS", true)
 	backendDefault := getEnv("BACKEND_TYPE", getEnv("BACKEND", "disk"))
-	lockTypeDefault := getEnv("LOCK_TYPE", "memory")
-	lockDirDefault := getEnv("LOCK_DIR", "")
-	cacheDirDefault := getEnv("CACHE_DIR", filepath.Join(os.TempDir(), "gobuildcache"))
+	lockTypeDefault := getEnv("LOCK_TYPE", "fslock")
+	lockDirDefault := getEnv("LOCK_DIR", filepath.Join(os.TempDir(), "gobuildcache", "locks"))
+	cacheDirDefault := getEnv("CACHE_DIR", filepath.Join(os.TempDir(), "gobuildcache", "cache"))
 	s3BucketDefault := getEnv("S3_BUCKET", "")
 	s3PrefixDefault := getEnv("S3_PREFIX", "")
 	s3TmpDirDefault := getEnv("S3_TMP_DIR", filepath.Join(os.TempDir(), "gobuildcache-s3"))
@@ -114,14 +114,12 @@ func runClearCommand() {
 	cacheDirDefault := getEnv("CACHE_DIR", filepath.Join(os.TempDir(), "gobuildcache"))
 	s3BucketDefault := getEnv("S3_BUCKET", "")
 	s3PrefixDefault := getEnv("S3_PREFIX", "")
-	s3TmpDirDefault := getEnv("S3_TMP_DIR", filepath.Join(os.TempDir(), "gobuildcache-s3"))
 
 	clearFlags.BoolVar(&debug, "debug", debugDefault, "Enable debug logging to stderr (env: DEBUG)")
 	clearFlags.StringVar(&backendType, "backend", backendDefault, "Backend type: disk (local only), s3 (env: BACKEND_TYPE)")
 	clearFlags.StringVar(&cacheDir, "cache-dir", cacheDirDefault, "Local cache directory (env: CACHE_DIR)")
 	clearFlags.StringVar(&s3Bucket, "s3-bucket", s3BucketDefault, "S3 bucket name (required for s3 backend) (env: S3_BUCKET)")
 	clearFlags.StringVar(&s3Prefix, "s3-prefix", s3PrefixDefault, "S3 key prefix (optional) (env: S3_PREFIX)")
-	clearFlags.StringVar(&s3TmpDir, "s3-tmp-dir", s3TmpDirDefault, "Local temp directory for S3 backend (env: S3_TMP_DIR)")
 
 	clearFlags.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s clear [flags]\n\n", os.Args[0])
