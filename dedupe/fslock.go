@@ -1,37 +1,30 @@
 package dedupe
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
-	"sync"
+	"time"
 
-	"github.com/juju/fslock"
+	"github.com/gofrs/flock"
 )
 
-// GofslockGroup is a Group implementation that uses filesystem locks for deduplication.
-// It uses the juju/fslock library to ensure only one execution happens for a given key
-// across all goroutines, with waiters sharing the result of the first execution.
-// This implementation is useful for cross-process deduplication or testing.
-type GofslockGroup struct {
+// FSLockGroup is a Group implementation that uses filesystem locks for mutual exclusion.
+// It uses the gofrs/flock library to ensure only one execution happens for a given key
+// at a time across all goroutines and processes. Unlike SingleflightGroup, this does not
+// share results within the same process - each caller will execute the function once they
+// acquire the lock.
+type FSLockGroup struct {
 	lockDir string
-	mu      sync.Mutex
-	calls   map[string]*fslockCall
 }
 
-// fslockCall represents an in-flight or completed call
-type fslockCall struct {
-	result interface{}
-	err    error
-	done   chan struct{}
-}
-
-// NewGofslockGroup creates a new GofslockGroup.
+// NewFlockGroup creates a new FlockGroup.
 // lockDir is the directory where lock files will be created.
-// If lockDir is empty, it defaults to os.TempDir()/dedupe-locks.
-func NewGofslockGroup(lockDir string) (*GofslockGroup, error) {
+// If lockDir is empty, it defaults to os.TempDir()/gobuildcache-dedupe-locks.
+func NewFlockGroup(lockDir string) (*FSLockGroup, error) {
 	if lockDir == "" {
 		lockDir = filepath.Join(os.TempDir(), "gobuildcache-dedupe-locks")
 	}
@@ -41,60 +34,35 @@ func NewGofslockGroup(lockDir string) (*GofslockGroup, error) {
 		return nil, fmt.Errorf("failed to create lock directory: %w", err)
 	}
 
-	return &GofslockGroup{
+	return &FSLockGroup{
 		lockDir: lockDir,
-		calls:   make(map[string]*fslockCall),
 	}, nil
 }
 
 // Do executes and returns the results of the given function using filesystem locks.
-// Only one execution will occur for a given key at a time, with other callers
-// waiting and sharing the result.
-func (g *GofslockGroup) Do(key string, fn func() (interface{}, error)) (v interface{}, err error, shared bool) {
+// Only one execution will occur for a given key at a time across all processes.
+// The shared return value is always false since this implementation provides mutual
+// exclusion rather than result sharing.
+func (g *FSLockGroup) Do(key string, fn func() (interface{}, error)) (v interface{}, err error, shared bool) {
 	// Hash the key to create a safe filename
 	hash := sha256.Sum256([]byte(key))
 	lockFileName := hex.EncodeToString(hash[:]) + ".lock"
 	lockPath := filepath.Join(g.lockDir, lockFileName)
 
-	// Check if there's already a call in progress
-	g.mu.Lock()
-	if call, exists := g.calls[key]; exists {
-		g.mu.Unlock()
-		// Wait for the existing call to complete
-		<-call.done
-		return call.result, call.err, true
-	}
-
-	// Create a new call
-	call := &fslockCall{
-		done: make(chan struct{}),
-	}
-	g.calls[key] = call
-	g.mu.Unlock()
-
-	// Acquire filesystem lock
-	lock := fslock.New(lockPath)
-	if err := lock.Lock(); err != nil {
-		g.mu.Lock()
-		delete(g.calls, key)
-		g.mu.Unlock()
-		close(call.done)
+	// Acquire filesystem lock (blocks until lock is available)
+	fileLock := flock.New(lockPath)
+	ctx, cc := context.WithTimeout(context.Background(), time.Second)
+	defer cc()
+	acquired, err := fileLock.TryLockContext(ctx, 10*time.Millisecond)
+	if err != nil {
 		return nil, fmt.Errorf("failed to acquire lock: %w", err), false
 	}
+	if !acquired {
+		return nil, fmt.Errorf("failed to acquire lock: timeout"), false
+	}
+	defer fileLock.Unlock()
 
 	// Execute the function
-	call.result, call.err = fn()
-
-	// Release the lock
-	lock.Unlock()
-
-	// Clean up
-	g.mu.Lock()
-	delete(g.calls, key)
-	g.mu.Unlock()
-
-	// Notify waiters
-	close(call.done)
-
-	return call.result, call.err, false
+	v, err = fn()
+	return v, err, false
 }

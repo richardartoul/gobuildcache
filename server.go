@@ -87,7 +87,13 @@ type CacheProg struct {
 
 // NewCacheProg creates a new cache program instance.
 // cacheDir is the local directory where cached files are stored for Go build tools to access.
-func NewCacheProg(backend backends.Backend, cacheDir string, debug bool, printStats bool) (*CacheProg, error) {
+func NewCacheProg(
+	backend backends.Backend,
+	sfGroup dedupe.Group,
+	cacheDir string,
+	debug bool,
+	printStats bool,
+) (*CacheProg, error) {
 	// Configure logger level based on debug flag
 	logLevel := slog.LevelInfo
 	if debug {
@@ -112,7 +118,7 @@ func NewCacheProg(backend backends.Backend, cacheDir string, debug bool, printSt
 		debug:      debug,
 		printStats: printStats,
 		logger:     logger,
-		sfGroup:    dedupe.NewSingleflightGroup(),
+		sfGroup:    sfGroup,
 	}
 	cp.writer.w = bufio.NewWriter(os.Stdout)
 	cp.seenActionIDs.ids = make(map[string]int)
