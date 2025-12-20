@@ -1,19 +1,25 @@
 package dedupe
 
-import "golang.org/x/sync/singleflight"
+import "sync"
 
-// SingleflightGroup is an implementation of Group that uses
-// the golang.org/x/sync/singleflight library.
-type SingleflightGroup struct {
-	group singleflight.Group
+type MemLock struct {
+	sync.Mutex
+	locks map[string]*sync.Mutex
 }
 
-// NewSingleflightGroup creates a new SingleflightGroup.
-func NewSingleflightGroup() *SingleflightGroup {
-	return &SingleflightGroup{}
+func NewMemLock() *MemLock {
+	return &MemLock{}
 }
 
-// Do executes and returns the results of the given function using singleflight.
-func (s *SingleflightGroup) Do(key string, fn func() (interface{}, error)) (v interface{}, err error, shared bool) {
-	return s.group.Do(key, fn)
+func (s *MemLock) DoWithLock(key string, fn func() (interface{}, error)) (v interface{}, err error) {
+	s.Lock()
+	lock, ok := s.locks[key]
+	if !ok {
+		lock = &sync.Mutex{}
+		s.locks[key] = lock
+	}
+	s.Unlock()
+	lock.Lock()
+	defer lock.Unlock()
+	return fn()
 }

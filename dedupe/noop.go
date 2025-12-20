@@ -12,7 +12,7 @@ func NewNoOpGroup() *NoOpGroup {
 
 // Do executes the function immediately without any deduplication.
 // The shared return value is always false since no deduplication occurs.
-func (n *NoOpGroup) Do(key string, fn func() (interface{}, error)) (v interface{}, err error, shared bool) {
+func (n *NoOpGroup) DoWithLock(key string, fn func() (interface{}, error)) (v interface{}, err error) {
 	v, err = fn()
-	return v, err, false
+	return v, err
 }

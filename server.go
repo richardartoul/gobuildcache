@@ -66,8 +66,16 @@ type CacheProg struct {
 	printStats bool
 	logger     *slog.Logger
 
-	// dedupe.Group to deduplicate concurrent requests
-	sfGroup dedupe.Group
+	// both GET and PUT requests are modifying the filesystem to cache
+	// files (GET loading from the backend and PUT writing directly), so
+	// we need to ensure exclusive access to avoid racing and/or corrupting
+	// the filesystem.
+	//
+	// We have multiple implementations of locker, one of which uses the
+	// filesystem itself to do the locking so it works even if there are
+	// multiple instances of the cache program running concurrently using
+	// the same cache directory.
+	locker dedupe.Locker
 
 	// Stats.
 	seenActionIDs struct {
@@ -91,7 +99,7 @@ type CacheProg struct {
 // cacheDir is the local directory where cached files are stored for Go build tools to access.
 func NewCacheProg(
 	backend backends.Backend,
-	sfGroup dedupe.Group,
+	sfGroup dedupe.Locker,
 	cacheDir string,
 	debug bool,
 	printStats bool,
@@ -120,7 +128,7 @@ func NewCacheProg(
 		debug:      debug,
 		printStats: printStats,
 		logger:     logger,
-		sfGroup:    sfGroup,
+		locker:     sfGroup,
 	}
 	cp.writer.w = bufio.NewWriter(os.Stdout)
 	cp.seenActionIDs.ids = make(map[string]int)
@@ -290,8 +298,8 @@ func (cp *CacheProg) handlePut(req *Request) (Response, error) {
 		}
 	}
 
-	key := "put:" + hex.EncodeToString(req.ActionID)
-	v, err, shared := cp.sfGroup.Do(key, func() (interface{}, error) {
+	key := hex.EncodeToString(req.ActionID)
+	v, err := cp.locker.DoWithLock(key, func() (interface{}, error) {
 		// Read body into memory (we need to write it to both local cache and backend)
 		var bodyData []byte
 		if req.BodySize > 0 && req.Body != nil {
@@ -328,13 +336,6 @@ func (cp *CacheProg) handlePut(req *Request) (Response, error) {
 		return &putResult{diskPath: diskPath}, nil
 	})
 
-	if shared {
-		cp.deduplicatedPuts.Add(1)
-		if cp.debug {
-			fmt.Fprintf(os.Stderr, "[DEBUG] PUT deduplicated (shared result): %s\n", hex.EncodeToString(req.ActionID))
-		}
-	}
-
 	if err != nil {
 		resp.Err = err.Error()
 		return resp, err
@@ -359,8 +360,8 @@ func (cp *CacheProg) handleGet(req *Request) (Response, error) {
 		}
 	}
 
-	key := "get:" + hex.EncodeToString(req.ActionID)
-	v, err, shared := cp.sfGroup.Do(key, func() (interface{}, error) {
+	key := hex.EncodeToString(req.ActionID)
+	v, err := cp.locker.DoWithLock(key, func() (interface{}, error) {
 		// Check local cache first
 		if meta := cp.localCache.check(req.ActionID); meta != nil {
 			// Local cache hit with metadata
@@ -415,13 +416,6 @@ func (cp *CacheProg) handleGet(req *Request) (Response, error) {
 			fromLocalCache: false,
 		}, nil
 	})
-
-	if shared {
-		cp.deduplicatedGets.Add(1)
-		if cp.debug {
-			fmt.Fprintf(os.Stderr, "[DEBUG] GET deduplicated (shared result): %s\n", hex.EncodeToString(req.ActionID))
-		}
-	}
 
 	if err != nil {
 		resp.Err = err.Error()

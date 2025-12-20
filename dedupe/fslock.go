@@ -43,7 +43,7 @@ func NewFlockGroup(lockDir string) (*FSLockGroup, error) {
 // Only one execution will occur for a given key at a time across all processes.
 // The shared return value is always false since this implementation provides mutual
 // exclusion rather than result sharing.
-func (g *FSLockGroup) Do(key string, fn func() (interface{}, error)) (v interface{}, err error, shared bool) {
+func (g *FSLockGroup) DoWithLock(key string, fn func() (interface{}, error)) (v interface{}, err error) {
 	// Hash the key to create a safe filename
 	hash := sha256.Sum256([]byte(key))
 	lockFileName := hex.EncodeToString(hash[:]) + ".lock"
@@ -55,14 +55,12 @@ func (g *FSLockGroup) Do(key string, fn func() (interface{}, error)) (v interfac
 	defer cc()
 	acquired, err := fileLock.TryLockContext(ctx, 10*time.Millisecond)
 	if err != nil {
-		return nil, fmt.Errorf("failed to acquire lock: %w", err), false
+		return nil, fmt.Errorf("failed to acquire lock: %w", err)
 	}
 	if !acquired {
-		return nil, fmt.Errorf("failed to acquire lock: timeout"), false
+		return nil, fmt.Errorf("failed to acquire lock: timeout")
 	}
 	defer fileLock.Unlock()
 
-	// Execute the function
-	v, err = fn()
-	return v, err, false
+	return fn()
 }

@@ -271,13 +271,13 @@ func createBackend() (backends.Backend, error) {
 	return backend, nil
 }
 
-func createDedupeGroup() (dedupe.Group, error) {
+func createDedupeGroup() (dedupe.Locker, error) {
 	dedupeType = strings.ToLower(dedupeType)
 
 	switch dedupeType {
 	case "memory", "":
 		// Default: in-memory singleflight
-		return dedupe.NewSingleflightGroup(), nil
+		return dedupe.NewMemLock(), nil
 
 	case "fslock", "fs":
 		// Filesystem-backed deduplication
