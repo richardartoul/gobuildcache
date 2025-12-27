@@ -32,6 +32,7 @@ jobs:
       - name: Run short tests
         env:
           GOCACHEPROG: ./builds/gobuildcache
+          debug: true
         run: make test
 
 
