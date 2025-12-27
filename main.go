@@ -60,7 +60,6 @@ func runServerCommand() {
 	cacheDirDefault := getEnv("CACHE_DIR", filepath.Join(os.TempDir(), "gobuildcache", "cache"))
 	s3BucketDefault := getEnv("S3_BUCKET", "")
 	s3PrefixDefault := getEnv("S3_PREFIX", "")
-	s3TmpDirDefault := getEnv("S3_TMP_DIR", filepath.Join(os.TempDir(), "gobuildcache-s3"))
 	errorRateDefault := getEnvFloat("ERROR_RATE", 0.0)
 
 	serverFlags.BoolVar(&debug, "debug", debugDefault, "Enable debug logging to stderr (env: DEBUG)")
@@ -71,7 +70,6 @@ func runServerCommand() {
 	serverFlags.StringVar(&cacheDir, "cache-dir", cacheDirDefault, "Local cache directory (env: CACHE_DIR)")
 	serverFlags.StringVar(&s3Bucket, "s3-bucket", s3BucketDefault, "S3 bucket name (required for s3 backend) (env: S3_BUCKET)")
 	serverFlags.StringVar(&s3Prefix, "s3-prefix", s3PrefixDefault, "S3 key prefix (optional) (env: S3_PREFIX)")
-	serverFlags.StringVar(&s3TmpDir, "s3-tmp-dir", s3TmpDirDefault, "Local temp directory for S3 backend (env: S3_TMP_DIR)")
 	serverFlags.Float64Var(&errorRate, "error-rate", errorRateDefault, "Error injection rate (0.0-1.0) for testing error handling (env: ERROR_RATE)")
 
 	serverFlags.Usage = func() {
@@ -88,7 +86,6 @@ func runServerCommand() {
 		fmt.Fprintf(os.Stderr, "  CACHE_DIR        Local cache directory\n")
 		fmt.Fprintf(os.Stderr, "  S3_BUCKET        S3 bucket name\n")
 		fmt.Fprintf(os.Stderr, "  S3_PREFIX        S3 key prefix\n")
-		fmt.Fprintf(os.Stderr, "  S3_TMP_DIR       Local temp directory for S3 backend\n")
 		fmt.Fprintf(os.Stderr, "\nNote: Command-line flags take precedence over environment variables.\n")
 		fmt.Fprintf(os.Stderr, "\nExamples:\n")
 		fmt.Fprintf(os.Stderr, "  # Run with disk backend using flags:\n")
@@ -111,7 +108,7 @@ func runClearCommand() {
 	// Get defaults from environment variables
 	debugDefault := getEnvBool("DEBUG", false)
 	backendDefault := getEnv("BACKEND_TYPE", getEnv("BACKEND", "disk"))
-	cacheDirDefault := getEnv("CACHE_DIR", filepath.Join(os.TempDir(), "gobuildcache"))
+	cacheDirDefault := getEnv("CACHE_DIR", filepath.Join(os.TempDir(), "gobuildcache", "cache"))
 	s3BucketDefault := getEnv("S3_BUCKET", "")
 	s3PrefixDefault := getEnv("S3_PREFIX", "")
 
