@@ -4,6 +4,25 @@ Effectively, `gobuildcache` leverages S3OZ as a distributed build cache for conc
 
 `gobuildcache` is highly sensitive to the latency of the remote storage backend, so it works best when running on self-hosted runners in AWS targeting an S3 Express One Zone bucket in the same region as the self-hosted runners. That said, it doesn't have to be used that way. For example, if you're using Github's hosted runners or self-hosted runners outside of AWS, you can use a different storage solution like Tigris. See `examples/github_actions_tigris.yml` for an example of using `gobuildcache` with Tigris.
 
+## Table of Contents
+
+- [Quick Start](#quick-start)
+  - [Installation](#installation)
+  - [Usage](#usage)
+  - [Github Actions Example](#github-actions-example)
+  - [S3 Lifecycle Policy](#s3-lifecycle-policy)
+- [Preventing Cache Bloat](#preventing-cache-bloat)
+- [Configuration](#configuration)
+- [How it Works](#how-it-works)
+  - [Architecture Overview](#architecture-overview)
+  - [Processing GET commands](#processing-get-commands)
+  - [Processing PUT commands](#processing-put-commands)
+  - [Locking](#locking)
+- [Frequently Asked Questions](#frequently-asked-questions)
+  - [Why should I use gobuildcache?](#why-should-i-use-gobuildcache)
+  - [Can I use regular S3?](#can-i-use-regular-s3)
+  - [Do I have to use gobuildcache with self-hosted runners in AWS and S3OZ?](#do-i-have-to-use-gobuildcache-with-self-hosted-runners-in-aws-and-s3oz)
+
 # Quick Start
 
 ## Installation
