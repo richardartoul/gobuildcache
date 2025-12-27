@@ -86,17 +86,19 @@ type CacheProg struct {
 		sync.Mutex
 		ids map[string]int // Maps action ID to request count
 	}
-	duplicateGets    atomic.Int64
-	duplicatePuts    atomic.Int64
-	putCount         atomic.Int64
-	getCount         atomic.Int64
-	hitCount         atomic.Int64
-	localCacheHits   atomic.Int64
-	backendCacheHits atomic.Int64
-	deduplicatedGets atomic.Int64
-	deduplicatedPuts atomic.Int64
-	retriedRequests  atomic.Int64
-	totalRetries     atomic.Int64
+	duplicateGets       atomic.Int64
+	duplicatePuts       atomic.Int64
+	putCount            atomic.Int64
+	getCount            atomic.Int64
+	hitCount            atomic.Int64
+	localCacheHits      atomic.Int64
+	backendCacheHits    atomic.Int64
+	deduplicatedGets    atomic.Int64
+	deduplicatedPuts    atomic.Int64
+	retriedRequests     atomic.Int64
+	totalRetries        atomic.Int64
+	backendBytesRead    atomic.Int64 // Total bytes read from backend
+	backendBytesWritten atomic.Int64 // Total bytes written to backend
 }
 
 // NewCacheProg creates a new cache program instance.
@@ -249,6 +251,27 @@ func (cp *CacheProg) trackActionID(actionID []byte) bool {
 	return count > 0 // It's a duplicate if we've seen it before
 }
 
+// formatBytes formats a byte count as a human-readable string.
+func formatBytes(bytes int64) string {
+	const (
+		KB = 1024
+		MB = KB * 1024
+		GB = MB * 1024
+		TB = GB * 1024
+	)
+
+	if bytes < KB {
+		return fmt.Sprintf("%d B", bytes)
+	} else if bytes < MB {
+		return fmt.Sprintf("%.2f KB", float64(bytes)/KB)
+	} else if bytes < GB {
+		return fmt.Sprintf("%.2f MB", float64(bytes)/MB)
+	} else if bytes < TB {
+		return fmt.Sprintf("%.2f GB", float64(bytes)/GB)
+	}
+	return fmt.Sprintf("%.2f TB", float64(bytes)/TB)
+}
+
 // getResult holds the result of a Get operation for singleflight
 type getResult struct {
 	outputID       []byte
@@ -358,6 +381,9 @@ func (cp *CacheProg) handlePut(req *Request) (Response, error) {
 			cp.logger.Warn("backend PUT failed, but local cache succeeded",
 				"actionID", hex.EncodeToString(req.ActionID),
 				"error", err)
+		} else {
+			// Track bytes written to backend on success
+			cp.backendBytesWritten.Add(req.BodySize)
 		}
 
 		return &putResult{diskPath: diskPath}, nil
@@ -428,6 +454,9 @@ func (cp *CacheProg) handleGet(req *Request) (Response, error) {
 				miss: true,
 			}, nil
 		}
+
+		// Backend hit - track bytes read from backend
+		cp.backendBytesRead.Add(size)
 
 		// Backend hit - write to local cache with metadata
 		defer body.Close()
@@ -654,6 +683,8 @@ func (cp *CacheProg) Run() error {
 		deduplicatedPuts := cp.deduplicatedPuts.Load()
 		retriedRequests := cp.retriedRequests.Load()
 		totalRetries := cp.totalRetries.Load()
+		backendBytesRead := cp.backendBytesRead.Load()
+		backendBytesWritten := cp.backendBytesWritten.Load()
 		missCount := getCount - hitCount
 		hitRate := 0.0
 		localHitRate := 0.0
@@ -688,6 +719,9 @@ func (cp *CacheProg) Run() error {
 			deduplicatedPuts, float64(deduplicatedPuts)/float64(putCount)*100)
 		fmt.Fprintf(os.Stderr, "  Total operations: %d\n", totalOps)
 		fmt.Fprintf(os.Stderr, "  Unique action IDs: %d\n", uniqueActionIDs)
+		fmt.Fprintf(os.Stderr, "  Backend bytes read: %s\n", formatBytes(backendBytesRead))
+		fmt.Fprintf(os.Stderr, "  Backend bytes written: %s\n", formatBytes(backendBytesWritten))
+		fmt.Fprintf(os.Stderr, "  Total backend bytes transferred: %s\n", formatBytes(backendBytesRead+backendBytesWritten))
 		if retriedRequests > 0 {
 			avgRetries := float64(totalRetries) / float64(retriedRequests)
 			fmt.Fprintf(os.Stderr, "  Retried requests: %d (%.1f%% of operations)\n",
