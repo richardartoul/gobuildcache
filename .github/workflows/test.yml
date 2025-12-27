@@ -22,13 +22,6 @@ jobs:
           cache: false
       - name: Build binary
         run: make build
-      - name: Debug AWS credentials
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        run: |
-          echo "AWS_ACCESS_KEY_ID: $AWS_ACCESS_KEY_ID"
-          echo "AWS_SECRET_ACCESS_KEY: $AWS_SECRET_ACCESS_KEY"
       - name: Run short tests
         env:
           BACKEND_TYPE: s3
