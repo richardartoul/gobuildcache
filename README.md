@@ -57,9 +57,6 @@ go test ./...
 
 Your credentials must have the following permissions:
 
-TODO: S3express permission
-TODO: Confirm these
-
 ```json
 {
   "Version": "2012-10-17",
@@ -118,39 +115,21 @@ Here's a sample lifecycle policy that expires objects after 7 days and aborts in
 }
 ```
 
-In normal circumstances you should never have to run the `gobuildcache` binary directly, it will be instead be invoked by the go compiler (hence why configuration is managed via environment variables instead of command line flags). However, the `gobuildcache` binary ships with `clear` commands for cache management:
+# Preventing Cache Bloat
 
-## Clear Commands
+`gobuildcache` performs zero automatic GC or trimming of the local filesystem cache or the remote cache backend. Therefore it is recommended that you run your CI on VMs with ephemeral storage and do not persist storage between CI runs. In addition, you should ensure that your remote cache backend has a lifecycle policy configured like the one described in the previous section.
 
-### Clear Local Cache
-
-Removes all cached files from the local filesystem cache directory:
+That said, you can use the `gobuildcache` binary to clear the local filesystem cache and remote cache backends by running the following commands:
 
 ```bash
 gobuildcache clear-local
 ```
 
-You can specify a custom cache directory:
-
 ```bash
-gobuildcache clear-local -cache-dir=/custom/cache/path
-# Or using environment variables:
-CACHE_DIR=/custom/cache/path gobuildcache clear-local
+gobuildcache clear-remote
 ```
 
-### Clear Remote Cache
-
-Clears all entries from the remote backend (e.g., S3):
-
-```bash
-# Using command-line flags:
-gobuildcache clear-remote -backend=s3 -s3-bucket=my-cache-bucket
-
-# Or using environment variables:
-BACKEND_TYPE=s3 S3_BUCKET=my-cache-bucket gobuildcache clear-remote
-```
-
-**Warning**: The `clear-remote` command will delete all cached objects from your S3 bucket. Use with caution, especially in shared environments. 
+The clear commands take the same flags / environment variables as the regular `gobuildcache` tool, so for example you can provide the `cache-dir` flag or `CACHE_DIR` environment variable to the `clear-local` command and the `s3-bucket` flag or `S3_BUCKET` environment variable to the `clear-remote` command.
 
 # Configuration
 
