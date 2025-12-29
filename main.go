@@ -67,7 +67,7 @@ func runServerCommand() {
 		lockDirDefault      = getEnv("LOCK_DIR", filepath.Join(os.TempDir(), "gobuildcache", "locks"))
 		cacheDirDefault     = getEnv("CACHE_DIR", filepath.Join(os.TempDir(), "gobuildcache", "cache"))
 		s3BucketDefault     = getEnv("S3_BUCKET", "")
-		s3PrefixDefault     = getEnv("S3_PREFIX", "")
+		s3PrefixDefault     = getEnv("S3_PREFIX", "gobuildcache/")
 		errorRateDefault    = getEnvFloat("ERROR_RATE", 0.0)
 		compressionDefault  = getEnvBool("COMPRESSION", true)
 		asyncBackendDefault = getEnvBool("ASYNC_BACKEND", true)
