@@ -1,27 +1,8 @@
-before:
-  hooks:
-    - go mod download
 builds:
--
-  main: ./main.go
-  binary: gobuildcache
-  ldflags:
-    - -s -w
-  goos:
-    - linux
-    - darwin
-  goarch:
-    - amd64
-    - arm
-    - arm64
-  goarm:
-    - 5
-    - 6
-    - 7
-archives:
--
-  id: gobuildcache
-  replacements:
-    darwin: Darwin
-    linux: Linux
-    amd64: x86_64
+  - env: [CGO_ENABLED=0]
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
