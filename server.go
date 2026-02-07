@@ -73,6 +73,7 @@ type CacheProg struct {
 	debug       bool
 	printStats  bool
 	compression bool
+	readOnly    bool
 	logger      *slog.Logger
 
 	// Latency tracking using DDSketch for quantile estimation.
@@ -97,6 +98,7 @@ type CacheProg struct {
 	duplicateGets         atomic.Int64
 	duplicatePuts         atomic.Int64
 	putCount              atomic.Int64
+	skippedPuts           atomic.Int64
 	getCount              atomic.Int64
 	hitCount              atomic.Int64
 	localCacheHits        atomic.Int64
@@ -122,6 +124,7 @@ func NewCacheProg(
 	debug bool,
 	printStats bool,
 	compression bool,
+	readOnly bool,
 ) (*CacheProg, error) {
 	logLevel := slog.LevelInfo
 	if debug {
@@ -144,6 +147,7 @@ func NewCacheProg(
 		debug:          debug,
 		printStats:     printStats,
 		compression:    compression,
+		readOnly:       readOnly,
 		logger:         logger,
 		locker:         sfGroup,
 		latencyTracker: metrics.NewLatencyTracker(0.01), // 1% relative accuracy
@@ -253,6 +257,7 @@ func (cp *CacheProg) Run() error {
 			localCacheHits        = cp.localCacheHits.Load()
 			backendCacheHits      = cp.backendCacheHits.Load()
 			putCount              = cp.putCount.Load()
+			skippedPuts           = cp.skippedPuts.Load()
 			duplicateGets         = cp.duplicateGets.Load()
 			duplicatePuts         = cp.duplicatePuts.Load()
 			deduplicatedGets      = cp.deduplicatedGets.Load()
@@ -289,16 +294,23 @@ func (cp *CacheProg) Run() error {
 			localCacheHits, localHitRate)
 		fmt.Fprintf(os.Stderr, "    Backend cache hits: %d (%.1f%% of GETs)\n",
 			backendCacheHits, backendHitRate)
-		fmt.Fprintf(os.Stderr, "    Duplicate GETs: %d (%.1f%% of GETs)\n",
-			duplicateGets, float64(duplicateGets)/float64(getCount)*100)
-		fmt.Fprintf(os.Stderr, "    Deduplicated GETs (singleflight): %d (%.1f%% of GETs)\n",
-			deduplicatedGets, float64(deduplicatedGets)/float64(getCount)*100)
+		if getCount > 0 {
+			fmt.Fprintf(os.Stderr, "    Duplicate GETs: %d (%.1f%% of GETs)\n",
+				duplicateGets, float64(duplicateGets)/float64(getCount)*100)
+			fmt.Fprintf(os.Stderr, "    Deduplicated GETs (singleflight): %d (%.1f%% of GETs)\n",
+				deduplicatedGets, float64(deduplicatedGets)/float64(getCount)*100)
+		}
 		fmt.Fprintf(os.Stderr, "    Backend bytes read: %s\n", formatBytes(backendBytesRead))
 		fmt.Fprintf(os.Stderr, "  PUT operations: %d\n", putCount)
-		fmt.Fprintf(os.Stderr, "    Duplicate PUTs: %d (%.1f%% of PUTs)\n",
-			duplicatePuts, float64(duplicatePuts)/float64(putCount)*100)
-		fmt.Fprintf(os.Stderr, "    Deduplicated PUTs (singleflight): %d (%.1f%% of PUTs)\n",
-			deduplicatedPuts, float64(deduplicatedPuts)/float64(putCount)*100)
+		if skippedPuts > 0 {
+			fmt.Fprintf(os.Stderr, "    Skipped PUTs (read-only mode): %d\n", skippedPuts)
+		}
+		if putCount > 0 {
+			fmt.Fprintf(os.Stderr, "    Duplicate PUTs: %d (%.1f%% of PUTs)\n",
+				duplicatePuts, float64(duplicatePuts)/float64(putCount)*100)
+			fmt.Fprintf(os.Stderr, "    Deduplicated PUTs (singleflight): %d (%.1f%% of PUTs)\n",
+				deduplicatedPuts, float64(deduplicatedPuts)/float64(putCount)*100)
+		}
 		fmt.Fprintf(os.Stderr, "    Backend bytes written: %s\n", formatBytes(backendBytesWritten))
 		fmt.Fprintf(os.Stderr, "  Total operations: %d\n", totalOps)
 		fmt.Fprintf(os.Stderr, "  Unique action IDs: %d\n", uniqueActionIDs)
@@ -386,6 +398,15 @@ func (cp *CacheProg) handlePut(req *Request) (Response, error) {
 
 	var resp Response
 	resp.ID = req.ID
+
+	// In read-only mode, skip all writes but return success
+	if cp.readOnly {
+		cp.skippedPuts.Add(1)
+		if cp.debug {
+			fmt.Fprintf(os.Stderr, "[DEBUG] PUT skipped (read-only mode): %s\n", hex.EncodeToString(req.ActionID))
+		}
+		return resp, nil
+	}
 
 	cp.putCount.Add(1)
 	isDuplicate := cp.trackActionID(req.ActionID)

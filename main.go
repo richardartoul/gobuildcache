@@ -25,6 +25,7 @@ var (
 	errorRate    float64
 	compression  bool
 	asyncBackend bool
+	readOnly     bool
 )
 
 func main() {
@@ -72,6 +73,7 @@ func runServerCommand() {
 		errorRateDefault    = getEnvFloatWithPrefix("ERROR_RATE", 0.0)
 		compressionDefault  = getEnvBoolWithPrefix("COMPRESSION", true)
 		asyncBackendDefault = getEnvBoolWithPrefix("ASYNC_BACKEND", true)
+		readOnlyDefault     = getEnvBoolWithPrefix("READ_ONLY", false)
 	)
 	serverFlags.BoolVar(&debug, "debug", debugDefault, "Enable debug logging to stderr (env: DEBUG)")
 	serverFlags.BoolVar(&printStats, "stats", printStatsDefault, "Print cache statistics on exit (env: PRINT_STATS)")
@@ -84,6 +86,7 @@ func runServerCommand() {
 	serverFlags.Float64Var(&errorRate, "error-rate", errorRateDefault, "Error injection rate (0.0-1.0) for testing error handling (env: ERROR_RATE)")
 	serverFlags.BoolVar(&compression, "compression", compressionDefault, "Enable LZ4 compression for backend storage (env: COMPRESSION)")
 	serverFlags.BoolVar(&asyncBackend, "async-backend", asyncBackendDefault, "Enable async backend writer for non-blocking PUT operations (env: ASYNC_BACKEND)")
+	serverFlags.BoolVar(&readOnly, "read-only", readOnlyDefault, "Read-only mode: allow cache reads but skip writes (env: READ_ONLY)")
 
 	serverFlags.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s [flags]\n\n", os.Args[0])
@@ -103,6 +106,7 @@ func runServerCommand() {
 		fmt.Fprintf(os.Stderr, "  S3_PREFIX        S3 key prefix\n")
 		fmt.Fprintf(os.Stderr, "  COMPRESSION      Enable LZ4 compression (true/false)\n")
 		fmt.Fprintf(os.Stderr, "  ASYNC_BACKEND    Enable async backend writer (true/false)\n")
+		fmt.Fprintf(os.Stderr, "  READ_ONLY        Read-only mode: allow reads, skip writes (true/false)\n")
 		fmt.Fprintf(os.Stderr, "\nNote: Command-line flags take precedence over environment variables.\n")
 		fmt.Fprintf(os.Stderr, "\nExamples:\n")
 		fmt.Fprintf(os.Stderr, "  # Run with disk backend using flags:\n")
@@ -295,7 +299,11 @@ func runServer() {
 		os.Exit(1)
 	}
 
-	prog, err := NewCacheProg(backend, lockingGroup, cacheDir, debug, printStats, compression)
+	if readOnly {
+		fmt.Fprintf(os.Stderr, "[INFO] Read-only mode enabled: cache reads allowed, writes skipped\n")
+	}
+
+	prog, err := NewCacheProg(backend, lockingGroup, cacheDir, debug, printStats, compression, readOnly)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating cache program: %v\n", err)
 		os.Exit(1)
