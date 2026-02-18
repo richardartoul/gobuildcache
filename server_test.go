@@ -82,14 +82,24 @@ func TestReadOnlyMode_SkipsPut(t *testing.T) {
 		t.Errorf("Expected no error in response, got: %s", resp.Err)
 	}
 
-	// Verify skippedPuts counter was incremented
+	// Verify skippedPuts counter was incremented (backend write skipped)
 	if cp.skippedPuts.Load() != 1 {
 		t.Errorf("Expected skippedPuts to be 1, got: %d", cp.skippedPuts.Load())
 	}
 
-	// Verify putCount was NOT incremented (since we skipped)
-	if cp.putCount.Load() != 0 {
-		t.Errorf("Expected putCount to be 0 (skipped), got: %d", cp.putCount.Load())
+	// Verify putCount WAS incremented (local cache write still happens)
+	if cp.putCount.Load() != 1 {
+		t.Errorf("Expected putCount to be 1, got: %d", cp.putCount.Load())
+	}
+
+	// Verify local cache was written to (DiskPath should be set)
+	if resp.DiskPath == "" {
+		t.Error("Expected DiskPath to be set (local cache should be written)")
+	}
+
+	// Verify backendBytesWritten is 0 (no backend write)
+	if cp.backendBytesWritten.Load() != 0 {
+		t.Errorf("Expected backendBytesWritten to be 0, got: %d", cp.backendBytesWritten.Load())
 	}
 }
 
@@ -133,12 +143,16 @@ func TestReadOnlyMode_MultipleSkippedPuts(t *testing.T) {
 	cp, cacheDir := createTestCacheProg(t, true) // readOnly = true
 	defer os.RemoveAll(cacheDir)
 
-	// Execute multiple PUTs
+	// Execute multiple PUTs with unique action IDs
 	for i := 0; i < 5; i++ {
+		actionID := make([]byte, 24)
+		copy(actionID, []byte("test-action-id-1234567"))
+		actionID[23] = byte('0' + i)
+
 		req := &Request{
 			ID:       int64(i),
 			Command:  CmdPut,
-			ActionID: []byte("test-action-id-12345678"),
+			ActionID: actionID,
 			OutputID: []byte("test-output-id-12345678"),
 			Body:     strings.NewReader("test body"),
 			BodySize: 9,
@@ -150,13 +164,13 @@ func TestReadOnlyMode_MultipleSkippedPuts(t *testing.T) {
 		}
 	}
 
-	// Verify all 5 puts were skipped
+	// Verify all 5 backend writes were skipped
 	if cp.skippedPuts.Load() != 5 {
 		t.Errorf("Expected skippedPuts to be 5, got: %d", cp.skippedPuts.Load())
 	}
 
-	// Verify putCount is still 0
-	if cp.putCount.Load() != 0 {
-		t.Errorf("Expected putCount to be 0, got: %d", cp.putCount.Load())
+	// Verify putCount is 5 (local cache writes still happen)
+	if cp.putCount.Load() != 5 {
+		t.Errorf("Expected putCount to be 5, got: %d", cp.putCount.Load())
 	}
 }

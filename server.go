@@ -395,15 +395,6 @@ func (cp *CacheProg) handlePut(req *Request) (Response, error) {
 	var resp Response
 	resp.ID = req.ID
 
-	// In read-only mode, skip all writes but return success
-	if cp.readOnly {
-		cp.skippedPuts.Add(1)
-		if cp.debug {
-			fmt.Fprintf(os.Stderr, "[DEBUG] PUT skipped (read-only mode): %s\n", hex.EncodeToString(req.ActionID))
-		}
-		return resp, nil
-	}
-
 	cp.putCount.Add(1)
 	isDuplicate := cp.trackActionID(req.ActionID)
 	if isDuplicate {
@@ -451,6 +442,15 @@ func (cp *CacheProg) handlePut(req *Request) (Response, error) {
 
 		if err != nil {
 			return nil, fmt.Errorf("failed to write to local cache: %w", err)
+		}
+
+		// In read-only mode, skip backend write but keep local cache
+		if cp.readOnly {
+			cp.skippedPuts.Add(1)
+			if cp.debug {
+				fmt.Fprintf(os.Stderr, "[DEBUG] PUT backend write skipped (read-only mode): %s\n", hex.EncodeToString(req.ActionID))
+			}
+			return &putResult{diskPath: diskPath}, nil
 		}
 
 		var (
