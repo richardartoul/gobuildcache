@@ -73,6 +73,7 @@ type CacheProg struct {
 	debug       bool
 	printStats  bool
 	compression bool
+	readOnly    bool
 	logger      *slog.Logger
 
 	// Latency tracking using DDSketch for quantile estimation.
@@ -97,6 +98,7 @@ type CacheProg struct {
 	duplicateGets         atomic.Int64
 	duplicatePuts         atomic.Int64
 	putCount              atomic.Int64
+	skippedPuts           atomic.Int64
 	getCount              atomic.Int64
 	hitCount              atomic.Int64
 	localCacheHits        atomic.Int64
@@ -122,6 +124,7 @@ func NewCacheProg(
 	debug bool,
 	printStats bool,
 	compression bool,
+	readOnly bool,
 ) (*CacheProg, error) {
 	logLevel := slog.LevelInfo
 	if debug {
@@ -144,6 +147,7 @@ func NewCacheProg(
 		debug:          debug,
 		printStats:     printStats,
 		compression:    compression,
+		readOnly:       readOnly,
 		logger:         logger,
 		locker:         sfGroup,
 		latencyTracker: metrics.NewLatencyTracker(0.01), // 1% relative accuracy
@@ -253,6 +257,7 @@ func (cp *CacheProg) Run() error {
 			localCacheHits        = cp.localCacheHits.Load()
 			backendCacheHits      = cp.backendCacheHits.Load()
 			putCount              = cp.putCount.Load()
+			skippedPuts           = cp.skippedPuts.Load()
 			duplicateGets         = cp.duplicateGets.Load()
 			duplicatePuts         = cp.duplicatePuts.Load()
 			deduplicatedGets      = cp.deduplicatedGets.Load()
@@ -295,6 +300,9 @@ func (cp *CacheProg) Run() error {
 			deduplicatedGets, float64(deduplicatedGets)/float64(getCount)*100)
 		fmt.Fprintf(os.Stderr, "    Backend bytes read: %s\n", formatBytes(backendBytesRead))
 		fmt.Fprintf(os.Stderr, "  PUT operations: %d\n", putCount)
+		if skippedPuts > 0 {
+			fmt.Fprintf(os.Stderr, "    Skipped PUTs (read-only mode): %d\n", skippedPuts)
+		}
 		fmt.Fprintf(os.Stderr, "    Duplicate PUTs: %d (%.1f%% of PUTs)\n",
 			duplicatePuts, float64(duplicatePuts)/float64(putCount)*100)
 		fmt.Fprintf(os.Stderr, "    Deduplicated PUTs (singleflight): %d (%.1f%% of PUTs)\n",
@@ -434,6 +442,15 @@ func (cp *CacheProg) handlePut(req *Request) (Response, error) {
 
 		if err != nil {
 			return nil, fmt.Errorf("failed to write to local cache: %w", err)
+		}
+
+		// In read-only mode, skip backend write but keep local cache
+		if cp.readOnly {
+			cp.skippedPuts.Add(1)
+			if cp.debug {
+				fmt.Fprintf(os.Stderr, "[DEBUG] PUT backend write skipped (read-only mode): %s\n", hex.EncodeToString(req.ActionID))
+			}
+			return &putResult{diskPath: diskPath}, nil
 		}
 
 		var (

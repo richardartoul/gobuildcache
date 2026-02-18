@@ -159,6 +159,7 @@ All environment variables support both `GOBUILDCACHE_<KEY>` and `<KEY>` forms (e
 | `-s3-prefix` | `GOBUILDCACHE_S3_PREFIX` | (empty) | S3 key prefix |
 | `-debug` | `GOBUILDCACHE_DEBUG` | `false` | Enable debug logging |
 | `-stats` | `GOBUILDCACHE_PRINT_STATS` | `false` | Print cache statistics on exit |
+| `-read-only` | `GOBUILDCACHE_READ_ONLY` | `false` | Read-only mode: allow cache reads but skip writes |
 
 
 # How it Works
