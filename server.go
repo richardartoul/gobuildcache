@@ -274,21 +274,11 @@ func (cp *CacheProg) Run() error {
 			hitRate               = 0.0
 			localHitRate          = 0.0
 			backendHitRate        = 0.0
-			duplicateGetRate      = 0.0
-			deduplicatedGetRate   = 0.0
-			duplicatePutRate      = 0.0
-			deduplicatedPutRate   = 0.0
 		)
 		if getCount > 0 {
 			hitRate = float64(hitCount) / float64(getCount) * 100
 			localHitRate = float64(localCacheHits) / float64(getCount) * 100
 			backendHitRate = float64(backendCacheHits) / float64(getCount) * 100
-			duplicateGetRate = float64(duplicateGets) / float64(getCount) * 100
-			deduplicatedGetRate = float64(deduplicatedGets) / float64(getCount) * 100
-		}
-		if putCount > 0 {
-			duplicatePutRate = float64(duplicatePuts) / float64(putCount) * 100
-			deduplicatedPutRate = float64(deduplicatedPuts) / float64(putCount) * 100
 		}
 
 		cp.seenActionIDs.Lock()
@@ -305,18 +295,18 @@ func (cp *CacheProg) Run() error {
 		fmt.Fprintf(os.Stderr, "    Backend cache hits: %d (%.1f%% of GETs)\n",
 			backendCacheHits, backendHitRate)
 		fmt.Fprintf(os.Stderr, "    Duplicate GETs: %d (%.1f%% of GETs)\n",
-			duplicateGets, duplicateGetRate)
+			duplicateGets, float64(duplicateGets)/float64(getCount)*100)
 		fmt.Fprintf(os.Stderr, "    Deduplicated GETs (singleflight): %d (%.1f%% of GETs)\n",
-			deduplicatedGets, deduplicatedGetRate)
+			deduplicatedGets, float64(deduplicatedGets)/float64(getCount)*100)
 		fmt.Fprintf(os.Stderr, "    Backend bytes read: %s\n", formatBytes(backendBytesRead))
 		fmt.Fprintf(os.Stderr, "  PUT operations: %d\n", putCount)
 		if skippedPuts > 0 {
 			fmt.Fprintf(os.Stderr, "    Skipped PUTs (read-only mode): %d\n", skippedPuts)
 		}
 		fmt.Fprintf(os.Stderr, "    Duplicate PUTs: %d (%.1f%% of PUTs)\n",
-			duplicatePuts, duplicatePutRate)
+			duplicatePuts, float64(duplicatePuts)/float64(putCount)*100)
 		fmt.Fprintf(os.Stderr, "    Deduplicated PUTs (singleflight): %d (%.1f%% of PUTs)\n",
-			deduplicatedPuts, deduplicatedPutRate)
+			deduplicatedPuts, float64(deduplicatedPuts)/float64(putCount)*100)
 		fmt.Fprintf(os.Stderr, "    Backend bytes written: %s\n", formatBytes(backendBytesWritten))
 		fmt.Fprintf(os.Stderr, "  Total operations: %d\n", totalOps)
 		fmt.Fprintf(os.Stderr, "  Unique action IDs: %d\n", uniqueActionIDs)
