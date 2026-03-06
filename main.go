@@ -299,7 +299,7 @@ func runServer() {
 		os.Exit(1)
 	}
 
-	if readOnly {
+	if readOnly && debug {
 		fmt.Fprintf(os.Stderr, "[INFO] Read-only mode enabled: cache reads allowed, writes skipped\n")
 	}
 
@@ -383,7 +383,9 @@ func createBackend() (backends.Backend, error) {
 	// Wrap with error backend if error rate is configured
 	if errorRate > 0 {
 		backend = backends.NewError(backend, errorRate)
-		fmt.Fprintf(os.Stderr, "[INFO] Error injection enabled with rate: %.2f%%\n", errorRate*100)
+		if debug {
+			fmt.Fprintf(os.Stderr, "[INFO] Error injection enabled with rate: %.2f%%\n", errorRate*100)
+		}
 	}
 
 	// Wrap with async backend if enabled
@@ -397,7 +399,9 @@ func createBackend() (backends.Backend, error) {
 			Level: logLevel,
 		}))
 		backend = backends.NewAsyncBackendWriter(backend, logger)
-		fmt.Fprintf(os.Stderr, "[INFO] Async backend writer enabled\n")
+		if debug {
+			fmt.Fprintf(os.Stderr, "[INFO] Async backend writer enabled\n")
+		}
 	}
 
 	// Wrap with debug backend if debug mode is enabled
