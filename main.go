@@ -383,9 +383,7 @@ func createBackend() (backends.Backend, error) {
 	// Wrap with error backend if error rate is configured
 	if errorRate > 0 {
 		backend = backends.NewError(backend, errorRate)
-		if debug {
-			fmt.Fprintf(os.Stderr, "[INFO] Error injection enabled with rate: %.2f%%\n", errorRate*100)
-		}
+		fmt.Fprintf(os.Stderr, "[INFO] Error injection enabled with rate: %.2f%%\n", errorRate*100)
 	}
 
 	// Wrap with async backend if enabled
