@@ -28,9 +28,10 @@ type GCS struct {
 func NewGCS(bucket, prefix string) (*GCS, error) {
 	ctx := context.Background()
 
-	// Create GCS client using Application Default Credentials
-	// This will use GOOGLE_APPLICATION_CREDENTIALS env var or metadata service
-	client, err := storage.NewClient(ctx)
+	// Create GCS client using Application Default Credentials.
+	// WithJSONReads forces the JSON API for downloads (default is XML).
+	// This is required for GCS Anywhere Cache compatibility.
+	client, err := storage.NewClient(ctx, storage.WithJSONReads())
 	if err != nil {
 		return nil, fmt.Errorf("failed to create GCS client: %w", err)
 	}
