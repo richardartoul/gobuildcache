@@ -96,7 +96,7 @@ func (abw *AsyncBackendWriter) Get(actionID []byte) (outputID []byte, body io.Re
 // Close gracefully shuts down the async writer and waits for all in-flight operations to complete.
 // It also closes the underlying backend.
 func (abw *AsyncBackendWriter) Close() error {
-	abw.logger.Info("shutting down async backend writer",
+	abw.logger.Debug("shutting down async backend writer",
 		"startedPuts", abw.startedPuts.Load(),
 		"successPuts", abw.successPuts.Load(),
 		"failedPuts", abw.failedPuts.Load())
