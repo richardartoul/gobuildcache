@@ -299,7 +299,7 @@ func runServer() {
 		os.Exit(1)
 	}
 
-	if readOnly {
+	if readOnly && debug {
 		fmt.Fprintf(os.Stderr, "[INFO] Read-only mode enabled: cache reads allowed, writes skipped\n")
 	}
 
@@ -397,7 +397,9 @@ func createBackend() (backends.Backend, error) {
 			Level: logLevel,
 		}))
 		backend = backends.NewAsyncBackendWriter(backend, logger)
-		fmt.Fprintf(os.Stderr, "[INFO] Async backend writer enabled\n")
+		if debug {
+			fmt.Fprintf(os.Stderr, "[INFO] Async backend writer enabled\n")
+		}
 	}
 
 	// Wrap with debug backend if debug mode is enabled
