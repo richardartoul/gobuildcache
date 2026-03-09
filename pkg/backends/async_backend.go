@@ -109,7 +109,7 @@ func (abw *AsyncBackendWriter) Close() error {
 
 	if abw.successPuts.Load() > 0 {
 		avgPutTime := time.Duration(abw.totalPutTime.Load()/abw.successPuts.Load()) * time.Microsecond
-		abw.logger.Info("async backend writer statistics",
+		abw.logger.Debug("async backend writer statistics",
 			"avgPutTime", avgPutTime)
 	}
 
