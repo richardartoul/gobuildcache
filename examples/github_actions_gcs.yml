@@ -1,0 +1,35 @@
+name: Tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          # Use our own cache, obviously.
+          cache: false
+      - name: Install gobuildcache
+        run: go install github.com/richardartoul/gobuildcache@latest
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+      - name: Run short tests
+        env:
+          GOBUILDCACHE_BACKEND_TYPE: gcs
+          GOBUILDCACHE_GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
+          GOBUILDCACHE_GCS_PREFIX: go-build-cache/${{ github.repository }}
+          GOCACHEPROG: gobuildcache
+        run: go test ./...

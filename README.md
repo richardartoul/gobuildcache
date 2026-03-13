@@ -21,7 +21,7 @@
 
 Effectively, `gobuildcache` leverages S3OZ as a distributed build cache for concurrent `go build` or `go test` processes regardless of whether they're running on a single machine or distributed across a fleet of CI VMs. This dramatically improves CI performance for large Go repositories because each CI process will behave as if running with an almost completely pre-populated build cache, even if the CI process was started on a completely ephemeral VM that has never compiled code or executed tests for the repository before.
 
-`gobuildcache` is highly sensitive to the latency of the remote storage backend, so it works best when running on self-hosted runners in AWS targeting an S3 Express One Zone bucket in the same region as the self-hosted runners. That said, it doesn't have to be used that way. For example, if you're using Github's hosted runners or self-hosted runners outside of AWS, you can use a different storage solution like Tigris. See `examples/github_actions_tigris.yml` for an example of using `gobuildcache` with Tigris.
+`gobuildcache` is highly sensitive to the latency of the remote storage backend, so it works best when running on self-hosted runners in AWS targeting an S3 Express One Zone bucket in the same region (and ideally same availability zone) as the self-hosted runners. That said, it doesn't have to be used that way. For example, if you're using Github's hosted runners or self-hosted runners outside of AWS, you can use a different storage solution like Tigris or Google Cloud Storage (GCS). For GCP users, enabling GCS Anywhere Cache can provide performance similar to S3OZ for read-heavy workloads. See `examples/github_actions_tigris.yml` for an example of using `gobuildcache` with Tigris.
 
 # Quick Start
 
@@ -41,7 +41,9 @@ go test ./...
 
 By default, `gobuildcache` uses an on-disk cache stored in the OS default temporary directory. This is useful for testing and experimentation with `gobuildcache`, but provides no benefits over the Go compiler's built-in cache, which also stores cached data locally on disk.
 
-For "production" use-cases in CI, you'll want to configure `gobuildcache` to use S3 Express One Zone, or a similarly low latency distributed backend.
+For "production" use-cases in CI, you'll want to configure `gobuildcache` to use S3 Express One Zone, Google Cloud Storage, or a similarly low latency distributed backend.
+
+### Using S3
 
 ```bash
 export GOBUILDCACHE_BACKEND_TYPE=s3
@@ -62,6 +64,86 @@ go test ./...
 ```
 
 > **Note**: All configuration environment variables support both `GOBUILDCACHE_<KEY>` and `<KEY>` forms (e.g., both `GOBUILDCACHE_S3_BUCKET` and `S3_BUCKET` work). The prefixed version takes precedence if both are set. The prefixed form is recommended to avoid conflicts with other tools. If the prefixed variable is set to an empty string, it falls through to the unprefixed version (or default).
+
+### Using Google Cloud Storage (GCS)
+
+```bash
+export GOBUILDCACHE_BACKEND_TYPE=gcs
+export GOBUILDCACHE_GCS_BUCKET=$BUCKET_NAME
+```
+
+GCS authentication uses Application Default Credentials. You can provide credentials in one of the following ways:
+
+1. **Service Account JSON file** (recommended for CI):
+```bash
+export GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account-key.json
+export GOCACHEPROG=gobuildcache
+export GOBUILDCACHE_BACKEND_TYPE=gcs
+export GOBUILDCACHE_GCS_BUCKET=$BUCKET_NAME
+go build ./...
+go test ./...
+```
+
+2. **Metadata service** (when running on GCP):
+```bash
+# No credentials file needed - uses metadata service automatically
+export GOCACHEPROG=gobuildcache
+export GOBUILDCACHE_BACKEND_TYPE=gcs
+export GOBUILDCACHE_GCS_BUCKET=$BUCKET_NAME
+go build ./...
+go test ./...
+```
+
+3. **gcloud CLI credentials** (for local development):
+```bash
+gcloud auth application-default login
+export GOCACHEPROG=gobuildcache
+export GOBUILDCACHE_BACKEND_TYPE=gcs
+export GOBUILDCACHE_GCS_BUCKET=$BUCKET_NAME
+go build ./...
+go test ./...
+```
+
+#### GCS Anywhere Cache (Recommended for Performance)
+
+For improved performance, especially in read-heavy workloads, consider enabling [GCS Anywhere Cache](https://cloud.google.com/storage/docs/anywhere-cache). Anywhere Cache provides an SSD-backed zonal read cache that can significantly reduce latency for frequently accessed cache objects.
+
+**Benefits:**
+- **Lower read latency**: Cached reads from the same zone can achieve single-digit millisecond latency, comparable to S3OZ for repeated access
+- **Reduced costs**: Lower data transfer costs, especially for multi-region buckets, and reduced retrieval fees
+- **Better performance**: Especially beneficial when multiple CI jobs access the same cached artifacts
+- **Automatic scaling**: Cache capacity and bandwidth scale automatically based on usage
+
+**Requirements:**
+- Bucket must be in a [supported region/zone](https://cloud.google.com/storage/docs/anywhere-cache#availability)
+- CI runners should be in the same zone as the cache for optimal performance
+- Anywhere Cache is most effective for read-heavy workloads with high cache hit ratios
+
+**Setup:**
+1. Verify your bucket region/zone supports Anywhere Cache
+2. Enable Anywhere Cache on your GCS bucket
+3. Configure the cache in the same zone as your CI runners for best performance
+4. Set admission policy to "First miss" for faster warm-up (caches on first access)
+5. Configure TTL based on your needs (1 hour to 7 days, default 24 hours)
+
+```bash
+# Enable Anywhere Cache using gcloud CLI
+# Replace ZONE_NAME with the zone where your CI runners are located
+gcloud storage buckets update gs://YOUR_BUCKET_NAME \
+    --enable-anywhere-cache \
+    --anywhere-cache-zone=ZONE_NAME \
+    --anywhere-cache-admission-policy=FIRST_MISS \
+    --anywhere-cache-ttl=7d
+```
+
+**Note:** 
+- Anywhere Cache only accelerates reads. Writes still go directly to the bucket, but since `gobuildcache` performs writes asynchronously, this typically doesn't impact build performance.
+- First-time access to an object will still hit the bucket (cache miss), but subsequent reads will be served from the cache.
+- For best results, ensure your CI runners and cache are in the same zone.
+
+For more details, including availability by region, see the [GCS Anywhere Cache documentation](https://cloud.google.com/storage/docs/anywhere-cache).
+
+#### AWS Credentials Permissions
 
 Your credentials must have the following permissions:
 
@@ -97,15 +179,36 @@ Your credentials must have the following permissions:
 }
 ```
 
+#### GCS Credentials Permissions
+
+Your GCS service account must have the following IAM roles or permissions:
+
+- `storage.objects.create` - to upload cache objects
+- `storage.objects.get` - to download cache objects
+- `storage.objects.delete` - to delete cache objects (for clearing)
+- `storage.objects.list` - to list objects (for clearing)
+
+The simplest way is to grant the `Storage Object Admin` role to your service account:
+
+```bash
+gcloud projects add-iam-policy-binding PROJECT_ID \
+    --member="serviceAccount:SERVICE_ACCOUNT_EMAIL" \
+    --role="roles/storage.objectAdmin"
+```
+
+Or for more granular control, create a custom role with only the required permissions.
+
 ## Github Actions Example
 
 See the `examples` directory for examples of how to use `gobuildcache` in a Github Actions workflow. 
 
-## S3 Lifecycle Policy
+## Lifecycle Policies
 
-It's recommended to configure a lifecycle policy on your S3 bucket to automatically expire old cache entries and control storage costs. Build cache data is typically only useful for a limited time (e.g., a few days to a week), after which it's likely stale.
+It's recommended to configure a lifecycle policy on your storage bucket to automatically expire old cache entries and control storage costs. Build cache data is typically only useful for a limited time (e.g., a few days to a week), after which it's likely stale.
 
-Here's a sample lifecycle policy that expires objects after 7 days and aborts incomplete multipart uploads after 24 hours:
+### S3 Lifecycle Policy
+
+Here's a sample S3 lifecycle policy that expires objects after 7 days and aborts incomplete multipart uploads after 24 hours:
 
 ```json
 {
@@ -127,6 +230,28 @@ Here's a sample lifecycle policy that expires objects after 7 days and aborts in
 }
 ```
 
+### GCS Lifecycle Policy
+
+For GCS, you can configure a lifecycle policy using `gsutil` or the GCP Console. Here's an example using `gsutil` that expires objects after 7 days:
+
+```bash
+gsutil lifecycle set - <<EOF
+{
+  "lifecycle": {
+    "rule": [
+      {
+        "action": {"type": "Delete"},
+        "condition": {"age": 7}
+      }
+    ]
+  }
+}
+EOF
+gsutil lifecycle set - gs://YOUR_BUCKET_NAME
+```
+
+Or using the GCP Console, navigate to your bucket → Lifecycle → Add a rule → Set condition to "Age" of 7 days → Action to "Delete".
+
 # Preventing Cache Bloat
 
 `gobuildcache` performs zero automatic GC or trimming of the local filesystem cache or the remote cache backend. Therefore, it is recommended that you run your CI on VMs with ephemeral storage and do not persist storage between CI runs. In addition, you should ensure that your remote cache backend has a lifecycle policy configured like the one described in the previous section.
@@ -141,7 +266,7 @@ gobuildcache clear-local
 gobuildcache clear-remote
 ```
 
-The clear commands take the same flags / environment variables as the regular `gobuildcache` tool, so for example you can provide the `cache-dir` flag or `CACHE_DIR` environment variable to the `clear-local` command and the `s3-bucket` flag or `S3_BUCKET` environment variable to the `clear-remote` command.
+The clear commands take the same flags / environment variables as the regular `gobuildcache` tool, so for example you can provide the `cache-dir` flag or `CACHE_DIR` environment variable to the `clear-local` command and the `s3-bucket` flag or `S3_BUCKET` environment variable (or `gcs-bucket`/`GCS_BUCKET` for GCS) to the `clear-remote` command.
 
 # Configuration
 
@@ -151,12 +276,14 @@ All environment variables support both `GOBUILDCACHE_<KEY>` and `<KEY>` forms (e
 
 | Flag | Environment Variable | Default | Description |
 |------|----------------------|---------|-------------|
-| `-backend` | `GOBUILDCACHE_BACKEND_TYPE` | `disk` | Backend type: `disk` or `s3` |
+| `-backend` | `GOBUILDCACHE_BACKEND_TYPE` | `disk` | Backend type: `disk`, `s3`, or `gcs` |
 | `-lock-type` | `GOBUILDCACHE_LOCK_TYPE` | `fslock` | Locking: `fslock` or `memory` |
 | `-cache-dir` | `GOBUILDCACHE_CACHE_DIR` | `$TMPDIR/gobuildcache/cache` | Local cache directory |
 | `-lock-dir` | `GOBUILDCACHE_LOCK_DIR` | `$TMPDIR/gobuildcache/locks` | Filesystem lock directory |
 | `-s3-bucket` | `GOBUILDCACHE_S3_BUCKET` | (none) | S3 bucket name (required for S3) |
 | `-s3-prefix` | `GOBUILDCACHE_S3_PREFIX` | (empty) | S3 key prefix |
+| `-gcs-bucket` | `GOBUILDCACHE_GCS_BUCKET` | (none) | GCS bucket name (required for GCS) |
+| `-gcs-prefix` | `GOBUILDCACHE_GCS_PREFIX` | (empty) | GCS object prefix |
 | `-debug` | `GOBUILDCACHE_DEBUG` | `false` | Enable debug logging |
 | `-stats` | `GOBUILDCACHE_PRINT_STATS` | `false` | Print cache statistics on exit |
 | `-read-only` | `GOBUILDCACHE_READ_ONLY` | `false` | Read-only mode: allow cache reads but skip writes |
@@ -175,6 +302,7 @@ graph TB
     GBC -->|2. reads/writes| LFS[Local Filesystem Cache]
     GBC -->|3. GET/PUT| Backend{Backend Type}
     Backend --> S3OZ[S3 Express One Zone]
+    Backend --> GCS[Google Cloud Storage]
 ```
 
 ## Processing `GET` commands
@@ -280,4 +408,29 @@ Yes, but the latency of regular S3 is 10-20x higher than S3OZ, which undermines 
 
 ## Do I have to use `gobuildcache` with self-hosted runners in AWS and S3OZ?
 
-No, you can use `gobuildcache` any way you want as long as the `gobuildcache` binary can reach the remote storage backend. For example, you could run it on your laptop and use regular S3, R2, or Tigris as the remote object storage solution. However, `gobuildcache` works best when the latency of remote backend operations (`GET` and `PUT`) is low, so for best performance we recommend using self-hosted CI running in AWS and targeting a S3OZ bucket in the same region as your CI runners.
+No, you can use `gobuildcache` any way you want as long as the `gobuildcache` binary can reach the remote storage backend. For example, you could run it on your laptop and use regular S3, R2, Tigris, or Google Cloud Storage as the remote object storage solution. However, `gobuildcache` works best when the latency of remote backend operations (`GET` and `PUT`) is low, so for best performance we recommend:
+
+- **AWS**: Self-hosted CI running in AWS targeting a S3OZ bucket in the same region (and ideally same availability zone) as your CI runners
+- **GCP**: Self-hosted CI running in GCP targeting a GCS Regional Standard bucket in the same region as your CI runners. For even better performance, consider enabling [GCS Anywhere Cache](https://cloud.google.com/storage/docs/anywhere-cache) to get zonal read caching.
+
+## Can I use Google Cloud Storage instead of S3?
+
+Yes! `gobuildcache` supports Google Cloud Storage (GCS) as a backend. GCS is a good alternative to S3, especially if you're already using GCP infrastructure. 
+
+**Performance Considerations:**
+
+- **Standard GCS**: While GCS doesn't have an exact equivalent to S3 Express One Zone's single-AZ storage, using GCS Regional Standard buckets in the same region as your compute provides good performance.
+
+- **GCS with Anywhere Cache** (Recommended): For read-heavy workloads like build caches, enabling [GCS Anywhere Cache](https://cloud.google.com/storage/docs/anywhere-cache) can significantly improve performance:
+  - **Read latency**: Cached reads from the same zone can achieve single-digit millisecond latency, comparable to S3OZ for repeated access
+  - **Cost savings**: Reduced data transfer costs and lower read operation costs
+  - **Best for**: Workloads where the same cache objects are accessed multiple times (common in CI where multiple jobs may access the same artifacts)
+  
+  Anywhere Cache is particularly effective when:
+  - Your CI runners are in the same zone as the cache
+  - You have high cache hit ratios (same objects accessed repeatedly)
+  - Your bucket is in a [supported region/zone](https://cloud.google.com/storage/docs/anywhere-cache#availability)
+
+- **Write latency**: GCS write latency may be higher than S3OZ, but since `gobuildcache` performs writes asynchronously, this typically doesn't impact build performance significantly.
+
+**Recommendation**: If you're using GCP and want performance closer to S3OZ, use GCS Regional Standard buckets with Anywhere Cache enabled in the same zone as your CI runners. This provides excellent read performance while maintaining better durability than single-AZ storage.
