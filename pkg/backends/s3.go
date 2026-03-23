@@ -124,6 +124,13 @@ func (s *S3) Get(actionID []byte) ([]byte, io.ReadCloser, int64, *time.Time, boo
 	sizeStr := result.Metadata["size"]
 	timeStr := result.Metadata["time"]
 
+	// Treat missing/empty outputID as a cache miss to prevent writing
+	// corrupted local cache entries with empty outputID metadata.
+	if outputIDHex == "" {
+		result.Body.Close()
+		return nil, nil, 0, nil, true, nil
+	}
+
 	outputID, err := hex.DecodeString(outputIDHex)
 	if err != nil {
 		result.Body.Close()

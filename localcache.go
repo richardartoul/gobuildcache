@@ -207,7 +207,9 @@ func (lc *localCache) writeWithMetadata(actionID []byte, body io.Reader, meta lo
 }
 
 // Check checks if a file exists in the local cache and returns its metadata.
-// Returns nil if not found, and logs a warning if metadata is missing/corrupted.
+// Returns nil if not found. Corrupted entries are cleaned up and treated
+// as cache misses. This can happen when stale entries from a previous
+// gobuildcache version or Go's native cache persist between builds.
 func (lc *localCache) check(actionID []byte) *localCacheMetadata {
 	// Try to read metadata directly (avoids extra Stat syscall)
 	// If the data file doesn't exist, the metadata file likely won't either
@@ -218,27 +220,36 @@ func (lc *localCache) check(actionID []byte) *localCacheMetadata {
 			return nil
 		}
 
-		lc.logger.Warn(
-			"failed to read local cache metadata",
+		// Metadata exists but is corrupted (e.g., missing outputID field).
+		// Log at debug level to avoid spam from stale entries that may
+		// persist between builds, while still providing observability
+		// when debugging.
+		lc.logger.Debug("evicting corrupted local cache entry",
 			"actionID", hex.EncodeToString(actionID),
-			"error", err,
-		)
-
-		// Metadata is missing or corrupted but data file might exist
-		// Check if data file exists
-		diskPath := lc.actionIDToPath(actionID)
-		if _, statErr := os.Stat(diskPath); statErr == nil {
-			// Data file exists but metadata is missing/corrupted
-			lc.logger.Warn(
-				"local cache file exists but metadata is missing/corrupted",
-				"actionID", hex.EncodeToString(actionID),
-				"error", err,
-			)
-		}
+			"error", err)
+		lc.evict(actionID)
 		return nil
 	}
 
 	return meta
+}
+
+// evict removes both the data file and metadata file for a cache entry.
+func (lc *localCache) evict(actionID []byte) {
+	diskPath := lc.actionIDToPath(actionID)
+	metaPath := lc.metadataPath(actionID)
+	if err := os.Remove(diskPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		lc.logger.Warn("failed to evict cached data file",
+			"actionID", hex.EncodeToString(actionID),
+			"path", diskPath,
+			"error", err)
+	}
+	if err := os.Remove(metaPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		lc.logger.Warn("failed to evict cached metadata file",
+			"actionID", hex.EncodeToString(actionID),
+			"path", metaPath,
+			"error", err)
+	}
 }
 
 // actionIDToPath converts an actionID to a local cache file path.
