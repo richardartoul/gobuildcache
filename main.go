@@ -397,7 +397,11 @@ func createBackend() (backends.Backend, error) {
 			return nil, fmt.Errorf("S3 bucket is required for S3 backend (set via -s3-bucket flag or S3_BUCKET env var)")
 		}
 
-		backend, err = backends.NewS3(s3Bucket, s3Prefix)
+		awsCfg, cfgErr := resolveS3Config()
+		if cfgErr != nil {
+			return nil, cfgErr
+		}
+		backend, err = backends.NewS3(s3Bucket, s3Prefix, awsCfg)
 
 	case "gcs":
 		if gcsBucket == "" {
@@ -442,6 +446,31 @@ func createBackend() (backends.Backend, error) {
 	}
 
 	return backend, nil
+}
+
+// resolveS3Config reads AWS configuration from environment variables using the
+// GOBUILDCACHE_ prefix convention, falling back to standard AWS env vars.
+// Using GOBUILDCACHE_-prefixed vars (e.g., GOBUILDCACHE_AWS_REGION instead of
+// AWS_REGION) allows users to provide AWS config to gobuildcache without those
+// values being inherited by other processes in the same environment, such as
+// test binaries spawned by go test.
+func resolveS3Config() (backends.S3Config, error) {
+	cfg := backends.S3Config{
+		Region:          getEnvWithPrefix("AWS_REGION", ""),
+		AccessKeyID:     getEnvWithPrefix("AWS_ACCESS_KEY_ID", ""),
+		SecretAccessKey: getEnvWithPrefix("AWS_SECRET_ACCESS_KEY", ""),
+		SessionToken:    getEnvWithPrefix("AWS_SESSION_TOKEN", ""),
+	}
+
+	// Validate that credentials are either both set or both unset.
+	if cfg.AccessKeyID != "" && cfg.SecretAccessKey == "" {
+		return backends.S3Config{}, fmt.Errorf("GOBUILDCACHE_AWS_ACCESS_KEY_ID (or AWS_ACCESS_KEY_ID) is set but GOBUILDCACHE_AWS_SECRET_ACCESS_KEY (or AWS_SECRET_ACCESS_KEY) is not; both must be provided together")
+	}
+	if cfg.AccessKeyID == "" && cfg.SecretAccessKey != "" {
+		return backends.S3Config{}, fmt.Errorf("GOBUILDCACHE_AWS_SECRET_ACCESS_KEY (or AWS_SECRET_ACCESS_KEY) is set but GOBUILDCACHE_AWS_ACCESS_KEY_ID (or AWS_ACCESS_KEY_ID) is not; both must be provided together")
+	}
+
+	return cfg, nil
 }
 
 func createLockingGroup() (locking.Group, error) {

@@ -56,14 +56,15 @@ You'll also have to provide AWS credentials. `gobuildcache` embeds the AWS V2 S3
 export GOCACHEPROG=gobuildcache
 export GOBUILDCACHE_BACKEND_TYPE=s3
 export GOBUILDCACHE_S3_BUCKET=$BUCKET_NAME
-export AWS_REGION=$BUCKET_REGION
-export AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY
-export AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY
+export GOBUILDCACHE_AWS_REGION=$BUCKET_REGION
+export GOBUILDCACHE_AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY
+export GOBUILDCACHE_AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY
+export GOBUILDCACHE_AWS_SESSION_TOKEN=$AWS_SESSION_TOKEN  # optional, for temporary credentials
 go build ./...
 go test ./...
 ```
 
-> **Note**: All configuration environment variables support both `GOBUILDCACHE_<KEY>` and `<KEY>` forms (e.g., both `GOBUILDCACHE_S3_BUCKET` and `S3_BUCKET` work). The prefixed version takes precedence if both are set. The prefixed form is recommended to avoid conflicts with other tools. If the prefixed variable is set to an empty string, it falls through to the unprefixed version (or default).
+> **Note**: All configuration environment variables support both `GOBUILDCACHE_<KEY>` and `<KEY>` forms (e.g., both `GOBUILDCACHE_S3_BUCKET` and `S3_BUCKET` work). The prefixed version takes precedence if both are set. The prefixed form is strongly recommended for AWS variables (`GOBUILDCACHE_AWS_REGION`, `GOBUILDCACHE_AWS_ACCESS_KEY_ID`, `GOBUILDCACHE_AWS_SECRET_ACCESS_KEY`, `GOBUILDCACHE_AWS_SESSION_TOKEN`) — by using the prefixed form instead of the standard `AWS_*` variables, you avoid those values being inherited by other processes in the same environment (e.g., test binaries spawned by `go test`). If the prefixed variable is set to an empty string, it falls through to the unprefixed version (or default).
 
 ### Using Google Cloud Storage (GCS)
 
@@ -287,6 +288,10 @@ All environment variables support both `GOBUILDCACHE_<KEY>` and `<KEY>` forms (e
 | `-debug` | `GOBUILDCACHE_DEBUG` | `false` | Enable debug logging |
 | `-stats` | `GOBUILDCACHE_PRINT_STATS` | `false` | Print cache statistics on exit |
 | `-read-only` | `GOBUILDCACHE_READ_ONLY` | `false` | Read-only mode: allow cache reads but skip writes |
+| (env var only) | `GOBUILDCACHE_AWS_REGION` | (none) | AWS region for S3 backend (falls back to `AWS_REGION`) |
+| (env var only) | `GOBUILDCACHE_AWS_ACCESS_KEY_ID` | (none) | AWS access key for S3 backend (falls back to `AWS_ACCESS_KEY_ID`) |
+| (env var only) | `GOBUILDCACHE_AWS_SECRET_ACCESS_KEY` | (none) | AWS secret key for S3 backend (falls back to `AWS_SECRET_ACCESS_KEY`) |
+| (env var only) | `GOBUILDCACHE_AWS_SESSION_TOKEN` | (none) | AWS session token for temporary credentials (falls back to `AWS_SESSION_TOKEN`) |
 
 
 # How it Works

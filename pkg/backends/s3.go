@@ -11,9 +11,22 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
+
+// S3Config holds AWS-specific configuration for the S3 backend.
+// These are resolved from environment variables in main.go using the
+// GOBUILDCACHE_-prefixed convention, allowing users to provide AWS
+// credentials without polluting the environment for other processes
+// (e.g., test binaries spawned by go test).
+type S3Config struct {
+	Region          string
+	AccessKeyID     string
+	SecretAccessKey string
+	SessionToken    string
+}
 
 // S3 implements Backend using AWS S3.
 // This backend only handles S3 operations; local disk caching is handled by server.go.
@@ -28,11 +41,23 @@ type S3 struct {
 // NewS3 creates a new S3-based cache backend.
 // bucket is the S3 bucket name where cache files will be stored.
 // prefix is an optional prefix for all S3 keys (e.g., "cache/" or "").
-func NewS3(bucket, prefix string) (*S3, error) {
+// awsCfg provides explicit AWS configuration (region, credentials) resolved by the caller.
+func NewS3(bucket, prefix string, awsCfg S3Config) (*S3, error) {
 	ctx := context.Background()
 
-	// Load AWS config from environment/credentials
-	cfg, err := config.LoadDefaultConfig(ctx)
+	var configOpts []func(*config.LoadOptions) error
+
+	if awsCfg.Region != "" {
+		configOpts = append(configOpts, config.WithRegion(awsCfg.Region))
+	}
+
+	if awsCfg.AccessKeyID != "" && awsCfg.SecretAccessKey != "" {
+		configOpts = append(configOpts, config.WithCredentialsProvider(
+			credentials.NewStaticCredentialsProvider(awsCfg.AccessKeyID, awsCfg.SecretAccessKey, awsCfg.SessionToken),
+		))
+	}
+
+	cfg, err := config.LoadDefaultConfig(ctx, configOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
 	}
