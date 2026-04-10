@@ -26,6 +26,7 @@ type S3Config struct {
 	AccessKeyID     string
 	SecretAccessKey string
 	SessionToken    string
+	UsePathStyle    bool
 }
 
 // S3 implements Backend using AWS S3.
@@ -62,7 +63,11 @@ func NewS3(bucket, prefix string, awsCfg S3Config) (*S3, error) {
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
 	}
 
-	client := s3.NewFromConfig(cfg)
+	client := s3.NewFromConfig(cfg, func(o *s3.Options) {
+		if awsCfg.UsePathStyle {
+			o.UsePathStyle = true
+		}
+	})
 
 	backend := &S3{
 		client:    client,
