@@ -460,6 +460,7 @@ func resolveS3Config() (backends.S3Config, error) {
 		AccessKeyID:     getEnvWithPrefix("AWS_ACCESS_KEY_ID", ""),
 		SecretAccessKey: getEnvWithPrefix("AWS_SECRET_ACCESS_KEY", ""),
 		SessionToken:    getEnvWithPrefix("AWS_SESSION_TOKEN", ""),
+		UsePathStyle:    getEnvBoolWithPrefix("AWS_S3_USE_PATH_STYLE", false),
 	}
 
 	// Validate that credentials are either both set or both unset.
