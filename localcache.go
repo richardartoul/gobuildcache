@@ -86,20 +86,35 @@ func (lc *localCache) writeMetadata(actionID []byte, meta localCacheMetadata) er
 		meta.Size,
 		meta.PutTime.Unix())
 
-	// Write to temp file first for atomic operation.
-	tmpPath := metaPath + ".tmp"
-	if err := os.WriteFile(tmpPath, []byte(content), 0644); err != nil {
-		return fmt.Errorf("failed to write temp metadata: %w", err)
+	if err := writeFileAtomically(metaPath, strings.NewReader(content)); err != nil {
+		return fmt.Errorf("failed to write metadata: %w", err)
 	}
 
-	// Then atomically rename. This prevents any partial metadata files
-	// from ever existing, although it increases the number of syscalls
-	// we need to perform.
-	if err := os.Rename(tmpPath, metaPath); err != nil {
-		os.Remove(tmpPath)
-		return fmt.Errorf("failed to rename metadata: %w", err)
+	return nil
+}
+
+// writeFileAtomically writes body to path through a temporary file in the same directory
+// and renames it into place, so readers never observe a partial file.
+//
+// The temporary file has a unique name: several gobuildcache processes can write the
+// same action ID at once (LOCK_TYPE=memory locks only within one process), and a shared
+// name would let one writer truncate, rename away, or delete another writer's file.
+func writeFileAtomically(path string, body io.Reader) error {
+	tmpFile, createErr := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.tmp")
+	if createErr != nil {
+		return fmt.Errorf("failed to create temp file: %w", createErr)
+	}
+	defer os.Remove(tmpFile.Name()) // No-op once the rename has succeeded.
+
+	// os.CreateTemp creates the file with mode 0600; keep the mode cached files had before.
+	_, copyErr := io.Copy(tmpFile, body)
+	if writeErr := errors.Join(copyErr, tmpFile.Chmod(0644), tmpFile.Close()); writeErr != nil {
+		return fmt.Errorf("failed to write temp file: %w", writeErr)
 	}
 
+	if renameErr := os.Rename(tmpFile.Name(), path); renameErr != nil {
+		return fmt.Errorf("failed to rename temp file: %w", renameErr)
+	}
 	return nil
 }
 
@@ -150,36 +165,8 @@ func (lc *localCache) readMetadata(actionID []byte) (*localCacheMetadata, error)
 func (lc *localCache) write(actionID []byte, body io.Reader) (string, error) {
 	diskPath := lc.actionIDToPath(actionID)
 
-	// Write to temp file first for atomic operation.
-	tmpPath := diskPath + ".tmp"
-	tmpFile, err := os.Create(tmpPath)
-	if err != nil {
-		return "", fmt.Errorf("failed to create temp file: %w", err)
-	}
-	defer os.Remove(tmpPath) // Clean up if something goes wrong
-
-	// Copy data to temp file.
-	_, err = io.Copy(tmpFile, body)
-	closeErr := tmpFile.Close()
-	if err != nil {
-		return "", fmt.Errorf("failed to write to temp file: %w", err)
-	}
-	if closeErr != nil {
-		return "", fmt.Errorf("failed to close temp file: %w", closeErr)
-	}
-
-	// Then atomically rename the temp file to the final destination.
-	// This prevents any partial cache files from ever existing, although
-	// it increases the number of syscalls we need to perform.
-	//
-	// NOTE: I'm not sure this is necessary. Even if we write a partial data
-	// file, if we don't write the metadata file, then the data file will
-	// never be observed. Similarly, there's no worry of data races because
-	// localcache.go is running with mutual exclusion over a given action ID
-	// as implemented in server.go. That said, I'm leaving this in for now
-	// because I think it's safer and probably doesn't hurt performance much.
-	if err := os.Rename(tmpPath, diskPath); err != nil {
-		return "", fmt.Errorf("failed to rename cache file: %w", err)
+	if err := writeFileAtomically(diskPath, body); err != nil {
+		return "", fmt.Errorf("failed to write cache file: %w", err)
 	}
 
 	// diskPath is already absolute (cacheDir is absolute)
