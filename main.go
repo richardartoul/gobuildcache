@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/richardartoul/gobuildcache/pkg/backends"
 	"github.com/richardartoul/gobuildcache/pkg/locking"
@@ -19,6 +20,7 @@ var (
 	backendType     string
 	lockingType     string
 	lockDir         string
+	lockTimeout     time.Duration
 	cacheDir        string
 	s3Bucket        string
 	s3Prefix        string
@@ -71,6 +73,7 @@ func runServerCommand() {
 		backendDefault         = getEnvWithPrefix("BACKEND_TYPE", getEnv("BACKEND", "disk"))
 		lockTypeDefault        = getEnvWithPrefix("LOCK_TYPE", "fslock")
 		lockDirDefault         = getEnvWithPrefix("LOCK_DIR", filepath.Join(os.TempDir(), "gobuildcache", "locks"))
+		lockTimeoutDefault     = getEnvDurationWithPrefix("LOCK_TIMEOUT", locking.DefaultLockTimeout)
 		cacheDirDefault        = getEnvWithPrefix("CACHE_DIR", filepath.Join(os.TempDir(), "gobuildcache", "cache"))
 		s3BucketDefault        = getEnvWithPrefix("S3_BUCKET", "")
 		s3PrefixDefault        = getEnvWithPrefix("S3_PREFIX", "gobuildcache/")
@@ -88,6 +91,7 @@ func runServerCommand() {
 	serverFlags.StringVar(&backendType, "backend", backendDefault, "Backend type: disk (local only), s3, gcs, azblob (env: BACKEND_TYPE)")
 	serverFlags.StringVar(&lockingType, "lock-type", lockTypeDefault, "Locking type: memory (in-memory), fslock (filesystem) (env: LOCK_TYPE)")
 	serverFlags.StringVar(&lockDir, "lock-dir", lockDirDefault, "Lock directory for fslock (env: LOCK_DIR)")
+	serverFlags.DurationVar(&lockTimeout, "lock-timeout", lockTimeoutDefault, "How long to wait for an fslock before running the request without it (env: LOCK_TIMEOUT)")
 	serverFlags.StringVar(&cacheDir, "cache-dir", cacheDirDefault, "Local cache directory (env: CACHE_DIR)")
 	serverFlags.StringVar(&s3Bucket, "s3-bucket", s3BucketDefault, "S3 bucket name (required for s3 backend) (env: S3_BUCKET)")
 	serverFlags.StringVar(&s3Prefix, "s3-prefix", s3PrefixDefault, "S3 key prefix (optional) (env: S3_PREFIX)")
@@ -113,6 +117,7 @@ func runServerCommand() {
 		fmt.Fprintf(os.Stderr, "  BACKEND_TYPE     Backend type (disk, s3, gcs, azblob)\n")
 		fmt.Fprintf(os.Stderr, "  LOCK_TYPE        Deduplication type (memory, fslock)\n")
 		fmt.Fprintf(os.Stderr, "  LOCK_DIR         Lock directory for fslock\n")
+		fmt.Fprintf(os.Stderr, "  LOCK_TIMEOUT     How long to wait for an fslock (e.g. 5s)\n")
 		fmt.Fprintf(os.Stderr, "  CACHE_DIR        Local cache directory\n")
 		fmt.Fprintf(os.Stderr, "  S3_BUCKET        S3 bucket name\n")
 		fmt.Fprintf(os.Stderr, "  S3_PREFIX        S3 key prefix\n")
@@ -532,7 +537,7 @@ func createLockingGroup() (locking.Group, error) {
 
 	case "fslock", "fs":
 		// Filesystem-backed deduplication
-		group, err := locking.NewFlockGroup(lockDir)
+		group, err := locking.NewFlockGroup(lockDir, lockTimeout)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create fslock group: %w", err)
 		}
@@ -620,4 +625,30 @@ func getEnvFloatWithPrefix(key string, defaultValue float64) float64 {
 		// Invalid prefixed value, fall through to unprefixed
 	}
 	return getEnvFloat(key, defaultValue)
+}
+
+// getEnvDuration gets a time.Duration environment variable (e.g. "5s") or returns a default value.
+func getEnvDuration(key string, defaultValue time.Duration) time.Duration {
+	value := os.Getenv(key)
+	if value == "" {
+		return defaultValue
+	}
+	d, err := time.ParseDuration(value)
+	if err != nil {
+		return defaultValue
+	}
+	return d
+}
+
+// getEnvDurationWithPrefix gets a time.Duration environment variable, checking for GOBUILDCACHE_ prefix first.
+// This allows users to use either GOBUILDCACHE_<KEY> or <KEY> for configuration.
+// The prefixed version takes precedence if set, but falls back to unprefixed if the prefixed value is invalid.
+func getEnvDurationWithPrefix(key string, defaultValue time.Duration) time.Duration {
+	if value := os.Getenv("GOBUILDCACHE_" + key); value != "" {
+		if d, err := time.ParseDuration(value); err == nil {
+			return d
+		}
+		// Invalid prefixed value, fall through to unprefixed
+	}
+	return getEnvDuration(key, defaultValue)
 }

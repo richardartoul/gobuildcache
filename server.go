@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -81,8 +82,10 @@ type CacheProg struct {
 
 	// both GET and PUT requests are modifying the filesystem to cache
 	// files (GET loading from the backend and PUT writing directly), so
-	// we need to ensure exclusive access to avoid racing and/or corrupting
-	// the filesystem.
+	// we take a lock per action ID to avoid duplicating that work, such as
+	// fetching the same entry from the backend several times. Local cache
+	// writes are atomic and isolated, so the lock is not needed for
+	// correctness and requests proceed without it if it can't be acquired.
 	//
 	// We have multiple implementations of locker, one of which uses the
 	// filesystem itself to do the locking so it works even if there are
@@ -107,6 +110,7 @@ type CacheProg struct {
 	deduplicatedPuts      atomic.Int64
 	retriedRequests       atomic.Int64
 	totalRetries          atomic.Int64
+	unlockedRequests      atomic.Int64 // Requests that ran without the lock because it couldn't be acquired
 	backendBytesRead      atomic.Int64 // Total bytes read from backend
 	backendBytesWritten   atomic.Int64 // Total bytes written to backend
 	compressionBytesIn    atomic.Int64 // Uncompressed bytes before compression
@@ -264,6 +268,7 @@ func (cp *CacheProg) Run() error {
 			deduplicatedPuts      = cp.deduplicatedPuts.Load()
 			retriedRequests       = cp.retriedRequests.Load()
 			totalRetries          = cp.totalRetries.Load()
+			unlockedRequests      = cp.unlockedRequests.Load()
 			backendBytesRead      = cp.backendBytesRead.Load()
 			backendBytesWritten   = cp.backendBytesWritten.Load()
 			compressionBytesIn    = cp.compressionBytesIn.Load()
@@ -339,6 +344,10 @@ func (cp *CacheProg) Run() error {
 			fmt.Fprintf(os.Stderr, "  Total retries: %d (avg %.1f retries per failed request)\n",
 				totalRetries, avgRetries)
 		}
+		if unlockedRequests > 0 {
+			fmt.Fprintf(os.Stderr, "  Requests run without the lock (lock not acquired): %d (%.1f%% of operations)\n",
+				unlockedRequests, float64(unlockedRequests)/float64(totalOps)*100)
+		}
 
 		// Print latency quantiles
 		fmt.Fprintf(os.Stderr, "\nLatency quantiles (ms):\n")
@@ -385,6 +394,24 @@ type putResult struct {
 	diskPath string
 }
 
+// doWithLock runs fn under the lock for key. If the lock can't be acquired, for
+// example because another process holds it longer than the lock timeout, fn runs
+// without it: failing the request would fail the build, and the lock only
+// deduplicates work.
+func (cp *CacheProg) doWithLock(cmd Cmd, key string, fn func() (interface{}, error)) (interface{}, error) {
+	v, err := cp.locker.DoWithLock(key, fn)
+	if !errors.Is(err, locking.ErrLockNotAcquired) {
+		return v, err
+	}
+
+	cp.unlockedRequests.Add(1)
+	cp.logger.Warn("running request without the lock",
+		"command", cmd,
+		"actionID", key,
+		"error", err)
+	return fn()
+}
+
 // handlePut processes a PUT request.
 func (cp *CacheProg) handlePut(req *Request) (Response, error) {
 	overallStart := time.Now()
@@ -405,7 +432,7 @@ func (cp *CacheProg) handlePut(req *Request) (Response, error) {
 	}
 
 	key := hex.EncodeToString(req.ActionID)
-	v, err := cp.locker.DoWithLock(key, func() (interface{}, error) {
+	v, err := cp.doWithLock(req.Command, key, func() (interface{}, error) {
 		// Someone may have cached the result already, so check the local cache first
 		// before doing anything expensive.
 		localCacheCheckStart := time.Now()
@@ -536,7 +563,7 @@ func (cp *CacheProg) handleGet(req *Request) (Response, error) {
 	}
 
 	key := hex.EncodeToString(req.ActionID)
-	v, err := cp.locker.DoWithLock(key, func() (interface{}, error) {
+	v, err := cp.doWithLock(req.Command, key, func() (interface{}, error) {
 		// Check local cache first
 		localCacheCheckStart := time.Now()
 		meta := cp.localCache.check(req.ActionID)

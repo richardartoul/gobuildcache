@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -208,5 +209,47 @@ func TestPut_ExistingEntryWithDifferentOutput(t *testing.T) {
 	}
 	if string(got) != "other body" {
 		t.Errorf("DiskPath holds %q, expected %q", got, "other body")
+	}
+}
+
+// unacquirableLock is a locking.Group whose lock can never be acquired, as when another
+// process holds it past the lock timeout.
+type unacquirableLock struct{}
+
+func (unacquirableLock) DoWithLock(key string, fn func() (interface{}, error)) (interface{}, error) {
+	return nil, fmt.Errorf("%w: timeout", locking.ErrLockNotAcquired)
+}
+
+func TestRequestsRunWithoutLockWhenNotAcquired(t *testing.T) {
+	cacheDir := t.TempDir()
+	cp, err := NewCacheProg(backends.NewNoop(), unacquirableLock{}, cacheDir, false, false, false, false)
+	if err != nil {
+		t.Fatalf("Failed to create CacheProg: %v", err)
+	}
+
+	putResp, err := cp.handlePut(&Request{
+		Command:  CmdPut,
+		ActionID: []byte("test-action-id-12345678"),
+		OutputID: []byte("test-output-id-12345678"),
+		Body:     strings.NewReader("test body content"),
+		BodySize: 17,
+	})
+	if err != nil || putResp.Err != "" {
+		t.Fatalf("handlePut failed: err=%v, resp.Err=%q", err, putResp.Err)
+	}
+
+	getResp, err := cp.handleGet(&Request{
+		Command:  CmdGet,
+		ActionID: []byte("test-action-id-12345678"),
+	})
+	if err != nil || getResp.Err != "" {
+		t.Fatalf("handleGet failed: err=%v, resp.Err=%q", err, getResp.Err)
+	}
+	if getResp.Miss || getResp.DiskPath != putResp.DiskPath {
+		t.Errorf("handleGet = miss %v, DiskPath %q; want a hit at %q", getResp.Miss, getResp.DiskPath, putResp.DiskPath)
+	}
+
+	if got := cp.unlockedRequests.Load(); got != 2 {
+		t.Errorf("Expected unlockedRequests to be 2, got: %d", got)
 	}
 }

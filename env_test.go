@@ -3,6 +3,7 @@ package main
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestGetEnvWithPrefix(t *testing.T) {
@@ -395,4 +396,31 @@ func TestResolveS3Config(t *testing.T) {
 			t.Errorf("SessionToken = %q, want empty", cfg.SessionToken)
 		}
 	})
+}
+
+func TestGetEnvDurationWithPrefix(t *testing.T) {
+	tests := []struct {
+		name     string
+		envVars  map[string]string
+		expected time.Duration
+	}{
+		{name: "returns default when neither env var is set", envVars: map[string]string{}, expected: 5 * time.Second},
+		{name: "returns unprefixed value", envVars: map[string]string{"TEST_DURATION": "2s"}, expected: 2 * time.Second},
+		{name: "prefixed value takes precedence", envVars: map[string]string{"TEST_DURATION": "2s", "GOBUILDCACHE_TEST_DURATION": "250ms"}, expected: 250 * time.Millisecond},
+		{name: "invalid prefixed value falls back to unprefixed", envVars: map[string]string{"TEST_DURATION": "2s", "GOBUILDCACHE_TEST_DURATION": "soon"}, expected: 2 * time.Second},
+		{name: "invalid value falls back to default", envVars: map[string]string{"TEST_DURATION": "10"}, expected: 5 * time.Second},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("TEST_DURATION", "")
+			t.Setenv("GOBUILDCACHE_TEST_DURATION", "")
+			for k, v := range tt.envVars {
+				t.Setenv(k, v)
+			}
+			if got := getEnvDurationWithPrefix("TEST_DURATION", 5*time.Second); got != tt.expected {
+				t.Errorf("getEnvDurationWithPrefix() = %v, expected %v", got, tt.expected)
+			}
+		})
+	}
 }

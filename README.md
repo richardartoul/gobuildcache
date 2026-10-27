@@ -389,6 +389,7 @@ All environment variables support both `GOBUILDCACHE_<KEY>` and `<KEY>` forms (e
 | `-lock-type` | `GOBUILDCACHE_LOCK_TYPE` | `fslock` | Locking: `fslock` or `memory` |
 | `-cache-dir` | `GOBUILDCACHE_CACHE_DIR` | `$TMPDIR/gobuildcache/cache` | Local cache directory |
 | `-lock-dir` | `GOBUILDCACHE_LOCK_DIR` | `$TMPDIR/gobuildcache/locks` | Filesystem lock directory |
+| `-lock-timeout` | `GOBUILDCACHE_LOCK_TIMEOUT` | `5s` | How long to wait for a filesystem lock before running the request without it |
 | `-s3-bucket` | `GOBUILDCACHE_S3_BUCKET` | (none) | S3 bucket name (required for S3) |
 | `-s3-prefix` | `GOBUILDCACHE_S3_PREFIX` | (empty) | S3 key prefix |
 | `-gcs-bucket` | `GOBUILDCACHE_GCS_BUCKET` | (none) | GCS bucket name (required for GCS) |
@@ -497,7 +498,9 @@ sequenceDiagram
 
 ## Locking
 
-`gobuildcache` uses exclusive filesystem locks to fence `GET` and `PUT` operations for the same file such that only one operation can run concurrently for any given file (operations across different files can proceed concurrently). This ensures that the filesystem does not get corrupted by trying to write the same file path concurrently if concurrent PUTs are received for the same file. It also prevents `GET` operations from seeing torn/partial writes from failed or in-flight `PUT` operations. Finally, it deduplicates `GET` operations against the remote backend, which saves resources, money, and bandwidth.
+`gobuildcache` uses exclusive filesystem locks to fence `GET` and `PUT` operations for the same file such that only one operation can run concurrently for any given file (operations across different files can proceed concurrently). This deduplicates `GET` operations against the remote backend, which saves resources, money, and bandwidth.
+
+The locks are not needed for correctness: every file is written through a uniquely named temporary file and atomically renamed into place, so concurrent writers can't corrupt each other and readers never see torn/partial writes. If a lock can't be acquired within `-lock-timeout` (for example, because another process is holding it during a slow backend request), the operation runs without the lock instead of failing the build.
 
 # Frequently Asked Questions
 
