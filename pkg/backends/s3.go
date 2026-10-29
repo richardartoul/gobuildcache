@@ -27,6 +27,8 @@ type S3Config struct {
 	SecretAccessKey string
 	SessionToken    string
 	UsePathStyle    bool
+	// Timeout bounds each S3 request, including reading a GET body. Zero means no limit.
+	Timeout time.Duration
 }
 
 // S3 implements Backend using AWS S3.
@@ -36,6 +38,7 @@ type S3 struct {
 	bucket    string
 	prefix    string
 	ctx       context.Context
+	timeout   time.Duration
 	awsConfig aws.Config
 }
 
@@ -74,11 +77,14 @@ func NewS3(bucket, prefix string, awsCfg S3Config) (*S3, error) {
 		bucket:    bucket,
 		prefix:    prefix,
 		ctx:       ctx,
+		timeout:   awsCfg.Timeout,
 		awsConfig: cfg,
 	}
 
 	// Test bucket access
-	_, err = client.HeadBucket(ctx, &s3.HeadBucketInput{
+	headCtx, cancel := backend.requestContext()
+	defer cancel()
+	_, err = client.HeadBucket(headCtx, &s3.HeadBucketInput{
 		Bucket: aws.String(bucket),
 	})
 	if err != nil {
@@ -121,7 +127,9 @@ func (s *S3) Put(actionID, outputID []byte, body io.Reader, bodySize int64) erro
 		Metadata: metadata,
 	}
 
-	_, err := s.client.PutObject(s.ctx, putInput)
+	ctx, cancel := s.requestContext()
+	defer cancel()
+	_, err := s.client.PutObject(ctx, putInput)
 	if err != nil {
 		return fmt.Errorf("failed to upload to S3: %w", err)
 	}
@@ -140,8 +148,10 @@ func (s *S3) Get(actionID []byte) ([]byte, io.ReadCloser, int64, *time.Time, boo
 		Key:    aws.String(key),
 	}
 
-	result, err := s.client.GetObject(s.ctx, getInput)
+	ctx, cancel := s.requestContext()
+	result, err := s.client.GetObject(ctx, getInput)
 	if err != nil {
+		cancel()
 		// Check if it's a not found error
 		if s.isNotFoundError(err) {
 			return nil, nil, 0, nil, true, nil
@@ -157,25 +167,48 @@ func (s *S3) Get(actionID []byte) ([]byte, io.ReadCloser, int64, *time.Time, boo
 	outputID, err := hex.DecodeString(outputIDHex)
 	if err != nil {
 		result.Body.Close()
+		cancel()
 		return nil, nil, 0, nil, true, nil
 	}
 
 	size, err := strconv.ParseInt(sizeStr, 10, 64)
 	if err != nil {
 		result.Body.Close()
+		cancel()
 		return nil, nil, 0, nil, true, nil
 	}
 
 	putTimeUnix, err := strconv.ParseInt(timeStr, 10, 64)
 	if err != nil {
 		result.Body.Close()
+		cancel()
 		return nil, nil, 0, nil, true, nil
 	}
 	putTime := time.Unix(putTimeUnix, 0)
 
 	// Return the S3 object body as a ReadCloser
-	// The caller is responsible for closing it
-	return outputID, result.Body, size, &putTime, false, nil
+	// The caller is responsible for closing it, which also releases the request context
+	return outputID, &cancelOnClose{ReadCloser: result.Body, cancel: cancel}, size, &putTime, false, nil
+}
+
+// requestContext returns the context for one S3 request, bounded by the configured timeout.
+func (s *S3) requestContext() (context.Context, context.CancelFunc) {
+	if s.timeout > 0 {
+		return context.WithTimeout(s.ctx, s.timeout)
+	}
+	return context.WithCancel(s.ctx)
+}
+
+// cancelOnClose cancels a GET's request context once the caller is done reading the body.
+type cancelOnClose struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (c *cancelOnClose) Close() error {
+	err := c.ReadCloser.Close()
+	c.cancel()
+	return err
 }
 
 // Close performs cleanup operations.

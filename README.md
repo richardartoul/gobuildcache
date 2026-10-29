@@ -401,6 +401,8 @@ All environment variables support both `GOBUILDCACHE_<KEY>` and `<KEY>` forms (e
 | `-debug` | `GOBUILDCACHE_DEBUG` | `false` | Enable debug logging |
 | `-stats` | `GOBUILDCACHE_PRINT_STATS` | `false` | Print cache statistics on exit |
 | `-read-only` | `GOBUILDCACHE_READ_ONLY` | `false` | Read-only mode: allow cache reads but skip writes |
+| `-backend-fallback` | `GOBUILDCACHE_BACKEND_FALLBACK` | `false` | Never fail a build on backend errors: failed GETs become misses, failed PUTs are dropped, and the build uses only the local cache if the backend is unreachable at startup or fails 5 times in a row. Failures are logged as warnings |
+| `-backend-timeout` | `GOBUILDCACHE_BACKEND_TIMEOUT` | `0` (none) | Timeout for each backend request, in Go duration syntax (e.g. `10s`). It covers reading a GET body, so leave room for large objects. S3 only |
 | (env var only) | `GOBUILDCACHE_AWS_REGION` | (none) | AWS region for S3 backend (falls back to `AWS_REGION`) |
 | (env var only) | `GOBUILDCACHE_AWS_ACCESS_KEY_ID` | (none) | AWS access key for S3 backend (falls back to `AWS_ACCESS_KEY_ID`) |
 | (env var only) | `GOBUILDCACHE_AWS_SECRET_ACCESS_KEY` | (none) | AWS secret key for S3 backend (falls back to `AWS_SECRET_ACCESS_KEY`) |

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/richardartoul/gobuildcache/pkg/backends"
 	"github.com/richardartoul/gobuildcache/pkg/locking"
@@ -30,7 +31,13 @@ var (
 	compression     bool
 	asyncBackend    bool
 	readOnly        bool
+	backendFallback bool
+	backendTimeout  time.Duration
 )
+
+// fallbackMaxConsecutiveErrors is how many backend failures in a row switch
+// a build to the local cache only when -backend-fallback is set.
+const fallbackMaxConsecutiveErrors = 5
 
 func main() {
 	// Check if we have a subcommand
@@ -82,6 +89,9 @@ func runServerCommand() {
 		compressionDefault     = getEnvBoolWithPrefix("COMPRESSION", true)
 		asyncBackendDefault    = getEnvBoolWithPrefix("ASYNC_BACKEND", true)
 		readOnlyDefault        = getEnvBoolWithPrefix("READ_ONLY", false)
+		backendFallbackDefault = getEnvBoolWithPrefix("BACKEND_FALLBACK", false)
+		// Invalid values fall back to 0 (no timeout), like the other env helpers.
+		backendTimeoutDefault, _ = time.ParseDuration(getEnvWithPrefix("BACKEND_TIMEOUT", "0"))
 	)
 	serverFlags.BoolVar(&debug, "debug", debugDefault, "Enable debug logging to stderr (env: DEBUG)")
 	serverFlags.BoolVar(&printStats, "stats", printStatsDefault, "Print cache statistics on exit (env: PRINT_STATS)")
@@ -99,6 +109,8 @@ func runServerCommand() {
 	serverFlags.BoolVar(&compression, "compression", compressionDefault, "Enable LZ4 compression for backend storage (env: COMPRESSION)")
 	serverFlags.BoolVar(&asyncBackend, "async-backend", asyncBackendDefault, "Enable async backend writer for non-blocking PUT operations (env: ASYNC_BACKEND)")
 	serverFlags.BoolVar(&readOnly, "read-only", readOnlyDefault, "Read-only mode: allow cache reads but skip writes (env: READ_ONLY)")
+	serverFlags.BoolVar(&backendFallback, "backend-fallback", backendFallbackDefault, "Never fail a build on backend errors: treat them as cache misses, use only the local cache if the backend can't be reached at startup or keeps failing (env: BACKEND_FALLBACK)")
+	serverFlags.DurationVar(&backendTimeout, "backend-timeout", backendTimeoutDefault, "Timeout for each backend request, e.g. 10s; 0 means no timeout. S3 only (env: BACKEND_TIMEOUT)")
 
 	serverFlags.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s [flags]\n\n", os.Args[0])
@@ -126,6 +138,8 @@ func runServerCommand() {
 		fmt.Fprintf(os.Stderr, "  COMPRESSION      Enable LZ4 compression (true/false)\n")
 		fmt.Fprintf(os.Stderr, "  ASYNC_BACKEND    Enable async backend writer (true/false)\n")
 		fmt.Fprintf(os.Stderr, "  READ_ONLY        Read-only mode: allow reads, skip writes (true/false)\n")
+		fmt.Fprintf(os.Stderr, "  BACKEND_FALLBACK Treat backend errors as cache misses (true/false)\n")
+		fmt.Fprintf(os.Stderr, "  BACKEND_TIMEOUT  Timeout for each backend request, e.g. 10s (S3 only)\n")
 		fmt.Fprintf(os.Stderr, "\nNote: Command-line flags take precedence over environment variables.\n")
 		fmt.Fprintf(os.Stderr, "\nExamples:\n")
 		fmt.Fprintf(os.Stderr, "  # Run with disk backend using flags:\n")
@@ -451,8 +465,21 @@ func createBackend() (backends.Backend, error) {
 		return nil, fmt.Errorf("unknown backend type: %s (supported: disk, s3, gcs, azblob)", backendType)
 	}
 
+	logLevel := slog.LevelInfo
+	if debug {
+		logLevel = slog.LevelDebug
+	}
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		Level: logLevel,
+	}))
+
 	if err != nil {
-		return nil, err
+		// backendFallback is only set by the server command, so clear commands still fail here.
+		if !backendFallback {
+			return nil, err
+		}
+		logger.Warn("backend unavailable, using only the local cache for this build", "backend", backendType, "error", err)
+		backend = backends.NewNoop()
 	}
 
 	// Wrap with error backend if error rate is configured
@@ -461,16 +488,13 @@ func createBackend() (backends.Backend, error) {
 		fmt.Fprintf(os.Stderr, "[INFO] Error injection enabled with rate: %.2f%%\n", errorRate*100)
 	}
 
+	// Inside the async writer, so failures of async PUTs are counted too.
+	if backendFallback {
+		backend = backends.NewFallback(backend, fallbackMaxConsecutiveErrors, logger)
+	}
+
 	// Wrap with async backend if enabled
 	if asyncBackend {
-		// Create logger for async backend
-		logLevel := slog.LevelInfo
-		if debug {
-			logLevel = slog.LevelDebug
-		}
-		logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-			Level: logLevel,
-		}))
 		backend = backends.NewAsyncBackendWriter(backend, logger)
 		if debug {
 			fmt.Fprintf(os.Stderr, "[INFO] Async backend writer enabled\n")
@@ -498,6 +522,7 @@ func resolveS3Config() (backends.S3Config, error) {
 		SecretAccessKey: getEnvWithPrefix("AWS_SECRET_ACCESS_KEY", ""),
 		SessionToken:    getEnvWithPrefix("AWS_SESSION_TOKEN", ""),
 		UsePathStyle:    getEnvBoolWithPrefix("AWS_S3_USE_PATH_STYLE", false),
+		Timeout:         backendTimeout,
 	}
 
 	// Validate that credentials are either both set or both unset.
