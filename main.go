@@ -16,6 +16,7 @@ import (
 var (
 	debug           bool
 	printStats      bool
+	statsDir        string
 	backendType     string
 	lockingType     string
 	lockDir         string
@@ -68,6 +69,7 @@ func runServerCommand() {
 		serverFlags            = flag.NewFlagSet("server", flag.ExitOnError)
 		debugDefault           = getEnvBoolWithPrefix("DEBUG", false)
 		printStatsDefault      = getEnvBoolWithPrefix("PRINT_STATS", true)
+		statsDirDefault        = getEnvWithPrefix("STATS_DIR", "")
 		backendDefault         = getEnvWithPrefix("BACKEND_TYPE", getEnv("BACKEND", "disk"))
 		lockTypeDefault        = getEnvWithPrefix("LOCK_TYPE", "fslock")
 		lockDirDefault         = getEnvWithPrefix("LOCK_DIR", filepath.Join(os.TempDir(), "gobuildcache", "locks"))
@@ -85,6 +87,7 @@ func runServerCommand() {
 	)
 	serverFlags.BoolVar(&debug, "debug", debugDefault, "Enable debug logging to stderr (env: DEBUG)")
 	serverFlags.BoolVar(&printStats, "stats", printStatsDefault, "Print cache statistics on exit (env: PRINT_STATS)")
+	serverFlags.StringVar(&statsDir, "stats-dir", statsDirDefault, "Directory to write a JSON statistics file to on exit, one file per process; empty disables (env: STATS_DIR)")
 	serverFlags.StringVar(&backendType, "backend", backendDefault, "Backend type: disk (local only), s3, gcs, azblob (env: BACKEND_TYPE)")
 	serverFlags.StringVar(&lockingType, "lock-type", lockTypeDefault, "Locking type: memory (in-memory), fslock (filesystem) (env: LOCK_TYPE)")
 	serverFlags.StringVar(&lockDir, "lock-dir", lockDirDefault, "Lock directory for fslock (env: LOCK_DIR)")
@@ -110,6 +113,7 @@ func runServerCommand() {
 		fmt.Fprintf(os.Stderr, "  The prefixed version takes precedence if both are set.\n\n")
 		fmt.Fprintf(os.Stderr, "  DEBUG            Enable debug logging (true/false)\n")
 		fmt.Fprintf(os.Stderr, "  PRINT_STATS      Print cache statistics on exit (true/false)\n")
+		fmt.Fprintf(os.Stderr, "  STATS_DIR        Directory for per-process JSON statistics files written on exit\n")
 		fmt.Fprintf(os.Stderr, "  BACKEND_TYPE     Backend type (disk, s3, gcs, azblob)\n")
 		fmt.Fprintf(os.Stderr, "  LOCK_TYPE        Deduplication type (memory, fslock)\n")
 		fmt.Fprintf(os.Stderr, "  LOCK_DIR         Lock directory for fslock\n")
@@ -359,7 +363,7 @@ func runServer() {
 		fmt.Fprintf(os.Stderr, "[INFO] Read-only mode enabled: cache reads allowed, writes skipped\n")
 	}
 
-	prog, err := NewCacheProg(backend, lockingGroup, cacheDir, debug, printStats, compression, readOnly)
+	prog, err := NewCacheProg(backend, lockingGroup, cacheDir, debug, printStats, compression, readOnly, statsDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating cache program: %v\n", err)
 		os.Exit(1)

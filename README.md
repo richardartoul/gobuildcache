@@ -399,7 +399,8 @@ All environment variables support both `GOBUILDCACHE_<KEY>` and `<KEY>` forms (e
 | (env var only) | `GOBUILDCACHE_AZURE_ACCOUNT` | (none) | Azure storage account name (used with `DefaultAzureCredential`) |
 | (env var only) | `GOBUILDCACHE_AZURE_STORAGE_CONNECTION_STRING` | (none) | Azure connection string (takes precedence over `AZURE_ACCOUNT`) |
 | `-debug` | `GOBUILDCACHE_DEBUG` | `false` | Enable debug logging |
-| `-stats` | `GOBUILDCACHE_PRINT_STATS` | `false` | Print cache statistics on exit |
+| `-stats` | `GOBUILDCACHE_PRINT_STATS` | `true` | Print cache statistics on exit |
+| `-stats-dir` | `GOBUILDCACHE_STATS_DIR` | (empty, disabled) | Directory to write a JSON statistics file to on exit, one `gobuildcache-stats-<unixnanos>-<pid>.json` per process. Works independently of `-stats` |
 | `-read-only` | `GOBUILDCACHE_READ_ONLY` | `false` | Read-only mode: allow cache reads but skip writes |
 | (env var only) | `GOBUILDCACHE_AWS_REGION` | (none) | AWS region for S3 backend (falls back to `AWS_REGION`) |
 | (env var only) | `GOBUILDCACHE_AWS_ACCESS_KEY_ID` | (none) | AWS access key for S3 backend (falls back to `AWS_ACCESS_KEY_ID`) |
