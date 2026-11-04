@@ -79,6 +79,7 @@ func (lt *LatencyTracker) GetQuantile(operation string, quantile float64) (float
 type Stats struct {
 	Operation string
 	Count     int64
+	Sum       float64
 	Min       float64
 	P50       float64
 	P90       float64
@@ -112,6 +113,7 @@ func (lt *LatencyTracker) GetStats(operation string) (Stats, error) {
 	return Stats{
 		Operation: operation,
 		Count:     int64(count),
+		Sum:       sketch.GetSum(),
 		Min:       min,
 		P50:       p50,
 		P90:       p90,

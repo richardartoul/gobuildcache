@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -48,7 +50,7 @@ func createTestCacheProg(t *testing.T, readOnly bool) (*CacheProg, string) {
 	backend := backends.NewNoop()
 	locker := locking.NewNoOpGroup()
 
-	cp, err := NewCacheProg(backend, locker, cacheDir, false, false, false, readOnly)
+	cp, err := NewCacheProg(backend, locker, cacheDir, false, false, false, readOnly, "")
 	if err != nil {
 		os.RemoveAll(cacheDir)
 		t.Fatalf("Failed to create CacheProg: %v", err)
@@ -208,5 +210,103 @@ func TestPut_ExistingEntryWithDifferentOutput(t *testing.T) {
 	}
 	if string(got) != "other body" {
 		t.Errorf("DiskPath holds %q, expected %q", got, "other body")
+	}
+}
+
+func TestWriteStatsFile(t *testing.T) {
+	cp, cacheDir := createTestCacheProg(t, false)
+	defer os.RemoveAll(cacheDir)
+
+	actionID := []byte("test-action-id-12345678")
+	get := func() Response {
+		t.Helper()
+		resp, err := cp.handleGet(&Request{Command: CmdGet, ActionID: actionID})
+		if err != nil {
+			t.Fatalf("handleGet returned error: %v", err)
+		}
+		return resp
+	}
+
+	if resp := get(); !resp.Miss {
+		t.Fatalf("Expected first GET to miss")
+	}
+	body := "test body content"
+	if _, err := cp.handlePut(&Request{
+		Command:  CmdPut,
+		ActionID: actionID,
+		OutputID: []byte("test-output-id-12345678"),
+		Body:     strings.NewReader(body),
+		BodySize: int64(len(body)),
+	}); err != nil {
+		t.Fatalf("handlePut returned error: %v", err)
+	}
+	if resp := get(); resp.Miss {
+		t.Fatalf("Expected second GET to hit")
+	}
+
+	// A missing nested directory must be created.
+	statsDir := filepath.Join(t.TempDir(), "nested", "stats")
+	path, err := cp.writeStatsFile(statsDir)
+	if err != nil {
+		t.Fatalf("writeStatsFile returned error: %v", err)
+	}
+
+	entries, err := os.ReadDir(statsDir)
+	if err != nil {
+		t.Fatalf("Failed to read stats dir: %v", err)
+	}
+	if len(entries) != 1 || filepath.Join(statsDir, entries[0].Name()) != path {
+		t.Fatalf("Expected exactly one file %s in stats dir, got %v", path, entries)
+	}
+	if matched, _ := filepath.Match("gobuildcache-stats-*-*.json", entries[0].Name()); !matched {
+		t.Errorf("Unexpected stats file name: %s", entries[0].Name())
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("Failed to read stats file: %v", err)
+	}
+	// Decode into a generic map so the test checks the JSON field names.
+	var got map[string]any
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("Failed to parse stats file: %v\n%s", err, data)
+	}
+
+	want := map[string]float64{
+		"version":           1,
+		"pid":               float64(os.Getpid()),
+		"gets":              2,
+		"hits":              1,
+		"misses":            1,
+		"local_hits":        1,
+		"backend_hits":      0,
+		"duplicate_gets":    1,
+		"puts":              1,
+		"duplicate_puts":    1,
+		"unique_action_ids": 1,
+		"failed_gets":       0,
+		"failed_puts":       0,
+	}
+	for key, wantVal := range want {
+		if got[key] != wantVal {
+			t.Errorf("%s = %v, expected %v", key, got[key], wantVal)
+		}
+	}
+
+	latencies, ok := got["latencies"].([]any)
+	if !ok {
+		t.Fatalf("latencies is %T, expected an array", got["latencies"])
+	}
+	var getOverall map[string]any
+	for _, l := range latencies {
+		if entry := l.(map[string]any); entry["operation"] == "get_overall" {
+			getOverall = entry
+		}
+	}
+	if getOverall == nil {
+		t.Fatalf("No get_overall latency entry in %v", latencies)
+	}
+	if getOverall["count"] != float64(2) {
+		t.Errorf("get_overall count = %v, expected 2", getOverall["count"])
 	}
 }

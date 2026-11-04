@@ -10,6 +10,8 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -74,7 +76,9 @@ type CacheProg struct {
 	printStats  bool
 	compression bool
 	readOnly    bool
+	statsDir    string
 	logger      *slog.Logger
+	startTime   time.Time
 
 	// Latency tracking using DDSketch for quantile estimation.
 	latencyTracker *metrics.LatencyTracker
@@ -113,6 +117,9 @@ type CacheProg struct {
 	compressionBytesOut   atomic.Int64 // Compressed bytes after compression
 	decompressionBytesIn  atomic.Int64 // Compressed bytes before decompression
 	decompressionBytesOut atomic.Int64 // Uncompressed bytes after decompression
+	failedGets            atomic.Int64 // handleGet returned an error
+	failedPuts            atomic.Int64 // handlePut returned an error
+	failedBackendPuts     atomic.Int64 // Synchronous backend PUT failed after the local cache write succeeded
 }
 
 // NewCacheProg creates a new cache program instance.
@@ -125,6 +132,7 @@ func NewCacheProg(
 	printStats bool,
 	compression bool,
 	readOnly bool,
+	statsDir string,
 ) (*CacheProg, error) {
 	logLevel := slog.LevelInfo
 	if debug {
@@ -148,7 +156,9 @@ func NewCacheProg(
 		printStats:     printStats,
 		compression:    compression,
 		readOnly:       readOnly,
+		statsDir:       statsDir,
 		logger:         logger,
+		startTime:      time.Now(),
 		locker:         sfGroup,
 		latencyTracker: metrics.NewLatencyTracker(0.01), // 1% relative accuracy
 	}
@@ -159,6 +169,16 @@ func NewCacheProg(
 
 // Run starts the cache program and processes requests concurrently.
 func (cp *CacheProg) Run() error {
+	// Every return path below waits for in-flight requests first, so the
+	// stats file is written once all counters are final.
+	if cp.statsDir != "" {
+		defer func() {
+			if _, err := cp.writeStatsFile(cp.statsDir); err != nil {
+				cp.logger.Warn("failed to write stats file", "dir", cp.statsDir, "error", err)
+			}
+		}()
+	}
+
 	// Send initial response with capabilities
 	if err := cp.sendInitialResponse(); err != nil {
 		return fmt.Errorf("failed to send initial response: %w", err)
@@ -355,6 +375,161 @@ func (cp *CacheProg) Run() error {
 	return nil
 }
 
+// statsFileVersion is the version of the JSON stats file schema. Bump it when
+// fields are renamed or change meaning.
+const statsFileVersion = 1
+
+// statsFile is the JSON document written to the stats directory when a cache
+// process exits. Counters are raw numbers so files can be summed.
+type statsFile struct {
+	Version   int       `json:"version"`
+	PID       int       `json:"pid"`
+	StartTime time.Time `json:"start_time"`
+	EndTime   time.Time `json:"end_time"`
+
+	Gets              int64 `json:"gets"`
+	Hits              int64 `json:"hits"`
+	Misses            int64 `json:"misses"`
+	LocalHits         int64 `json:"local_hits"`
+	BackendHits       int64 `json:"backend_hits"`
+	DuplicateGets     int64 `json:"duplicate_gets"`
+	DeduplicatedGets  int64 `json:"deduplicated_gets"`
+	FailedGets        int64 `json:"failed_gets"`
+	Puts              int64 `json:"puts"`
+	SkippedPuts       int64 `json:"skipped_puts"`
+	DuplicatePuts     int64 `json:"duplicate_puts"`
+	DeduplicatedPuts  int64 `json:"deduplicated_puts"`
+	FailedPuts        int64 `json:"failed_puts"`
+	FailedBackendPuts int64 `json:"failed_backend_puts"`
+
+	UniqueActionIDs       int64 `json:"unique_action_ids"`
+	BackendBytesRead      int64 `json:"backend_bytes_read"`
+	BackendBytesWritten   int64 `json:"backend_bytes_written"`
+	CompressionBytesIn    int64 `json:"compression_bytes_in"`
+	CompressionBytesOut   int64 `json:"compression_bytes_out"`
+	DecompressionBytesIn  int64 `json:"decompression_bytes_in"`
+	DecompressionBytesOut int64 `json:"decompression_bytes_out"`
+	RetriedRequests       int64 `json:"retried_requests"`
+	TotalRetries          int64 `json:"total_retries"`
+
+	Latencies []latencyStats `json:"latencies"`
+}
+
+type latencyStats struct {
+	Operation string  `json:"operation"`
+	Count     int64   `json:"count"`
+	SumMs     float64 `json:"sum_ms"`
+	MinMs     float64 `json:"min_ms"`
+	P50Ms     float64 `json:"p50_ms"`
+	P90Ms     float64 `json:"p90_ms"`
+	P95Ms     float64 `json:"p95_ms"`
+	P99Ms     float64 `json:"p99_ms"`
+	MaxMs     float64 `json:"max_ms"`
+}
+
+// writeStatsFile writes this process's statistics as JSON to a uniquely named
+// file in dir, creating dir if needed, and returns the file's path. The file is
+// written to a temporary name and renamed into place so readers never see a
+// partial file.
+func (cp *CacheProg) writeStatsFile(dir string) (string, error) {
+	endTime := time.Now()
+	getCount := cp.getCount.Load()
+	hitCount := cp.hitCount.Load()
+
+	cp.seenActionIDs.Lock()
+	uniqueActionIDs := len(cp.seenActionIDs.ids)
+	cp.seenActionIDs.Unlock()
+
+	failedBackendPuts := cp.failedBackendPuts.Load()
+	if abw, ok := cp.backend.(*backends.AsyncBackendWriter); ok {
+		failedBackendPuts += abw.Stats().FailedPuts
+	}
+
+	allStats := cp.latencyTracker.GetAllStats()
+	sort.Slice(allStats, func(i, j int) bool { return allStats[i].Operation < allStats[j].Operation })
+	latencies := make([]latencyStats, 0, len(allStats))
+	for _, s := range allStats {
+		latencies = append(latencies, latencyStats{
+			Operation: s.Operation,
+			Count:     s.Count,
+			SumMs:     s.Sum,
+			MinMs:     s.Min,
+			P50Ms:     s.P50,
+			P90Ms:     s.P90,
+			P95Ms:     s.P95,
+			P99Ms:     s.P99,
+			MaxMs:     s.Max,
+		})
+	}
+
+	stats := statsFile{
+		Version:   statsFileVersion,
+		PID:       os.Getpid(),
+		StartTime: cp.startTime,
+		EndTime:   endTime,
+
+		Gets:              getCount,
+		Hits:              hitCount,
+		Misses:            getCount - hitCount,
+		LocalHits:         cp.localCacheHits.Load(),
+		BackendHits:       cp.backendCacheHits.Load(),
+		DuplicateGets:     cp.duplicateGets.Load(),
+		DeduplicatedGets:  cp.deduplicatedGets.Load(),
+		FailedGets:        cp.failedGets.Load(),
+		Puts:              cp.putCount.Load(),
+		SkippedPuts:       cp.skippedPuts.Load(),
+		DuplicatePuts:     cp.duplicatePuts.Load(),
+		DeduplicatedPuts:  cp.deduplicatedPuts.Load(),
+		FailedPuts:        cp.failedPuts.Load(),
+		FailedBackendPuts: failedBackendPuts,
+
+		UniqueActionIDs:       int64(uniqueActionIDs),
+		BackendBytesRead:      cp.backendBytesRead.Load(),
+		BackendBytesWritten:   cp.backendBytesWritten.Load(),
+		CompressionBytesIn:    cp.compressionBytesIn.Load(),
+		CompressionBytesOut:   cp.compressionBytesOut.Load(),
+		DecompressionBytesIn:  cp.decompressionBytesIn.Load(),
+		DecompressionBytesOut: cp.decompressionBytesOut.Load(),
+		RetriedRequests:       cp.retriedRequests.Load(),
+		TotalRetries:          cp.totalRetries.Load(),
+
+		Latencies: latencies,
+	}
+
+	data, err := json.MarshalIndent(stats, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal stats: %w", err)
+	}
+	data = append(data, '\n')
+
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create stats directory: %w", err)
+	}
+
+	// The temp name deliberately does not match gobuildcache-stats-*.json.
+	tmp, err := os.CreateTemp(dir, ".gobuildcache-stats-*.tmp")
+	if err != nil {
+		return "", fmt.Errorf("failed to create temp stats file: %w", err)
+	}
+	_, err = tmp.Write(data)
+	if closeErr := tmp.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		os.Remove(tmp.Name())
+		return "", fmt.Errorf("failed to write temp stats file: %w", err)
+	}
+
+	// Many cache processes can exit concurrently, so the name includes both
+	// the exit time and the PID.
+	path := filepath.Join(dir, fmt.Sprintf("gobuildcache-stats-%d-%d.json", endTime.UnixNano(), stats.PID))
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		os.Remove(tmp.Name())
+		return "", fmt.Errorf("failed to rename stats file into place: %w", err)
+	}
+	return path, nil
+}
+
 // handleRequest processes a single request and returns a response.
 func (cp *CacheProg) handleRequest(req *Request) (Response, error) {
 	var resp Response
@@ -485,6 +660,7 @@ func (cp *CacheProg) handlePut(req *Request) (Response, error) {
 
 		if err != nil {
 			// Local cache is still valid even if backend fails
+			cp.failedBackendPuts.Add(1)
 			cp.logger.Warn("backend PUT failed, but local cache succeeded",
 				"actionID", hex.EncodeToString(req.ActionID),
 				"error", err)
@@ -497,6 +673,7 @@ func (cp *CacheProg) handlePut(req *Request) (Response, error) {
 	})
 
 	if err != nil {
+		cp.failedPuts.Add(1)
 		resp.Err = err.Error()
 		return resp, err
 	}
@@ -639,6 +816,7 @@ func (cp *CacheProg) handleGet(req *Request) (Response, error) {
 	})
 
 	if err != nil {
+		cp.failedGets.Add(1)
 		resp.Err = err.Error()
 		resp.Miss = true
 		return resp, err
