@@ -439,12 +439,17 @@ func (cp *CacheProg) writeStatsFile(dir string) (string, error) {
 	cp.seenActionIDs.Unlock()
 
 	failedBackendPuts := cp.failedBackendPuts.Load()
+	backendBytesWritten := cp.backendBytesWritten.Load()
 	backend := cp.backend
 	if d, ok := backend.(*backends.Debug); ok {
 		backend = d.Unwrap()
 	}
 	if abw, ok := backend.(*backends.AsyncBackendWriter); ok {
-		failedBackendPuts += abw.Stats().FailedPuts
+		asyncStats := abw.Stats()
+		failedBackendPuts += asyncStats.FailedPuts
+		// backendBytesWritten counts PUTs when they are queued, including ones
+		// that later fail, so use the bytes the async writer actually uploaded.
+		backendBytesWritten = asyncStats.SuccessBytes
 	}
 
 	allStats := cp.latencyTracker.GetAllStats()
@@ -487,7 +492,7 @@ func (cp *CacheProg) writeStatsFile(dir string) (string, error) {
 
 		UniqueActionIDs:       int64(uniqueActionIDs),
 		BackendBytesRead:      cp.backendBytesRead.Load(),
-		BackendBytesWritten:   cp.backendBytesWritten.Load(),
+		BackendBytesWritten:   backendBytesWritten,
 		CompressionBytesIn:    cp.compressionBytesIn.Load(),
 		CompressionBytesOut:   cp.compressionBytesOut.Load(),
 		DecompressionBytesIn:  cp.decompressionBytesIn.Load(),

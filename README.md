@@ -407,6 +407,22 @@ All environment variables support both `GOBUILDCACHE_<KEY>` and `<KEY>` forms (e
 | (env var only) | `GOBUILDCACHE_AWS_SECRET_ACCESS_KEY` | (none) | AWS secret key for S3 backend (falls back to `AWS_SECRET_ACCESS_KEY`) |
 | (env var only) | `GOBUILDCACHE_AWS_SESSION_TOKEN` | (none) | AWS session token for temporary credentials (falls back to `AWS_SESSION_TOKEN`) |
 
+## Statistics files
+
+The Go toolchain starts one `gobuildcache` process per `go` command, so with `-stats-dir` set a CI job produces one JSON file per process. Each file has a `version` field (currently `1`), the process's `pid`, `start_time`, and `end_time`, its counters, and a `latencies` array with one entry per operation.
+
+When combining files:
+
+- Counters such as `gets`, `hits`, `puts`, `failed_gets`, and the byte counts can be summed. `backend_bytes_written` only counts bytes the backend accepted, so failed async uploads are not included.
+- `unique_action_ids` counts distinct action IDs within one process. Processes often see the same action IDs, so the sum across files overstates how many distinct actions there were.
+- Latency `count` and `sum_ms` can be summed, which gives a combined mean. The quantiles (`p50_ms` and so on) can't be combined, and `min_ms`/`max_ms` combine as the minimum and maximum across files.
+
+For example, the overall hit rate for a job is:
+
+```bash
+jq -s '(map(.hits) | add) / (map(.gets) | add)' "$GOBUILDCACHE_STATS_DIR"/gobuildcache-stats-*.json
+```
+
 
 # How it Works
 
