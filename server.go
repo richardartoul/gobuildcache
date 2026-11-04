@@ -409,8 +409,6 @@ type statsFile struct {
 	CompressionBytesOut   int64 `json:"compression_bytes_out"`
 	DecompressionBytesIn  int64 `json:"decompression_bytes_in"`
 	DecompressionBytesOut int64 `json:"decompression_bytes_out"`
-	RetriedRequests       int64 `json:"retried_requests"`
-	TotalRetries          int64 `json:"total_retries"`
 
 	Latencies []latencyStats `json:"latencies"`
 }
@@ -441,7 +439,11 @@ func (cp *CacheProg) writeStatsFile(dir string) (string, error) {
 	cp.seenActionIDs.Unlock()
 
 	failedBackendPuts := cp.failedBackendPuts.Load()
-	if abw, ok := cp.backend.(*backends.AsyncBackendWriter); ok {
+	backend := cp.backend
+	if d, ok := backend.(*backends.Debug); ok {
+		backend = d.Unwrap()
+	}
+	if abw, ok := backend.(*backends.AsyncBackendWriter); ok {
 		failedBackendPuts += abw.Stats().FailedPuts
 	}
 
@@ -490,8 +492,6 @@ func (cp *CacheProg) writeStatsFile(dir string) (string, error) {
 		CompressionBytesOut:   cp.compressionBytesOut.Load(),
 		DecompressionBytesIn:  cp.decompressionBytesIn.Load(),
 		DecompressionBytesOut: cp.decompressionBytesOut.Load(),
-		RetriedRequests:       cp.retriedRequests.Load(),
-		TotalRetries:          cp.totalRetries.Load(),
 
 		Latencies: latencies,
 	}

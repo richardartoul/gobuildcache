@@ -22,6 +22,11 @@ func NewDebug(backend Backend) *Debug {
 	}
 }
 
+// Unwrap returns the wrapped backend.
+func (d *Debug) Unwrap() Backend {
+	return d.backend
+}
+
 // Put stores an object in the backend storage with debug logging.
 func (d *Debug) Put(actionID, outputID []byte, body io.Reader, bodySize int64) error {
 	fmt.Fprintf(os.Stderr, "[DEBUG] Put: actionID=%s, outputID=%s, size=%d\n",
