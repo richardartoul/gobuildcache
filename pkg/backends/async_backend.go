@@ -24,6 +24,7 @@ type AsyncBackendWriter struct {
 	startedPuts  atomic.Int64
 	failedPuts   atomic.Int64
 	successPuts  atomic.Int64
+	successBytes atomic.Int64
 	totalPutTime atomic.Int64 // microseconds
 }
 
@@ -77,6 +78,7 @@ func (abw *AsyncBackendWriter) Put(actionID, outputID []byte, body io.Reader, bo
 				"error", err)
 		} else {
 			abw.successPuts.Add(1)
+			abw.successBytes.Add(bodySize)
 			abw.logger.Debug("async backend PUT succeeded",
 				"actionID", fmt.Sprintf("%x", actionID[:min(8, len(actionID))]),
 				"size", bodySize,
@@ -126,6 +128,7 @@ func (abw *AsyncBackendWriter) Stats() AsyncBackendStats {
 	return AsyncBackendStats{
 		StartedPuts:        abw.startedPuts.Load(),
 		SuccessPuts:        abw.successPuts.Load(),
+		SuccessBytes:       abw.successBytes.Load(),
 		FailedPuts:         abw.failedPuts.Load(),
 		TotalPutTimeMicros: abw.totalPutTime.Load(),
 	}
@@ -135,6 +138,7 @@ func (abw *AsyncBackendWriter) Stats() AsyncBackendStats {
 type AsyncBackendStats struct {
 	StartedPuts        int64
 	SuccessPuts        int64
+	SuccessBytes       int64 // Bytes written by successful PUTs
 	FailedPuts         int64
 	TotalPutTimeMicros int64
 }

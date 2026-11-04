@@ -1,6 +1,9 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -384,6 +387,8 @@ func TestWriteStatsFile_FailureCounters(t *testing.T) {
 				"puts":                2,
 				"failed_puts":         1,
 				"failed_backend_puts": 1,
+				// The only upload failed, so nothing reached the backend.
+				"backend_bytes_written": 0,
 			}
 			for key, wantVal := range want {
 				if got[key] != wantVal {
@@ -391,5 +396,89 @@ func TestWriteStatsFile_FailureCounters(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestRun_WritesStatsFile checks that Run itself writes the stats file once it
+// has processed every request, including the async upload drained by close.
+func TestRun_WritesStatsFile(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	backend := backends.NewAsyncBackendWriter(backends.NewNoop(), logger)
+	statsDir := filepath.Join(t.TempDir(), "stats")
+	cp, err := NewCacheProg(backend, locking.NewNoOpGroup(), t.TempDir(), false, false, false, false, statsDir)
+	if err != nil {
+		t.Fatalf("Failed to create CacheProg: %v", err)
+	}
+
+	body := "test body content"
+	var input bytes.Buffer
+	writeLine := func(v any) {
+		t.Helper()
+		data, err := json.Marshal(v)
+		if err != nil {
+			t.Fatalf("Failed to marshal %v: %v", v, err)
+		}
+		input.Write(append(data, '\n'))
+	}
+	// Run handles requests concurrently, so the GET and PUT use different
+	// action IDs to keep the counts deterministic.
+	writeLine(Request{ID: 1, Command: CmdPut, ActionID: []byte("action-put"), OutputID: []byte("output-1"), BodySize: int64(len(body))})
+	writeLine(base64.StdEncoding.EncodeToString([]byte(body)))
+	writeLine(Request{ID: 2, Command: CmdGet, ActionID: []byte("action-get")})
+	writeLine(Request{ID: 3, Command: CmdClose})
+
+	cp.reader = bufio.NewReader(&input)
+	var output bytes.Buffer
+	cp.writer.w = bufio.NewWriter(&output)
+	if err := cp.Run(); err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+
+	entries, err := os.ReadDir(statsDir)
+	if err != nil {
+		t.Fatalf("Failed to read stats dir: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("Expected exactly one stats file, got %v", entries)
+	}
+	data, err := os.ReadFile(filepath.Join(statsDir, entries[0].Name()))
+	if err != nil {
+		t.Fatalf("Failed to read stats file: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("Failed to parse stats file: %v\n%s", err, data)
+	}
+
+	want := map[string]float64{
+		"gets":                  1,
+		"misses":                1,
+		"puts":                  1,
+		"unique_action_ids":     2,
+		"failed_backend_puts":   0,
+		"backend_bytes_written": float64(len(body)),
+	}
+	for key, wantVal := range want {
+		if got[key] != wantVal {
+			t.Errorf("%s = %v, expected %v", key, got[key], wantVal)
+		}
+	}
+
+	var putOverall map[string]any
+	for _, l := range got["latencies"].([]any) {
+		if entry := l.(map[string]any); entry["operation"] == "put_overall" {
+			putOverall = entry
+		}
+	}
+	if putOverall == nil {
+		t.Fatalf("No put_overall latency entry in %v", got["latencies"])
+	}
+	if putOverall["count"] != float64(1) {
+		t.Errorf("put_overall count = %v, expected 1", putOverall["count"])
+	}
+	// The PUT writes a file to the local cache, so it takes well over the
+	// 1µs resolution latencies are recorded at.
+	if sum, _ := putOverall["sum_ms"].(float64); sum <= 0 {
+		t.Errorf("put_overall sum_ms = %v, expected > 0", putOverall["sum_ms"])
 	}
 }
